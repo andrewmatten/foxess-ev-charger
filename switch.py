@@ -1,6 +1,7 @@
 """Switch entities for FoxESS EV Charger."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.switch import SwitchEntity
@@ -31,7 +32,7 @@ async def async_setup_entry(
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name="FoxESS Charger", manufacturer="FoxESS", model="A011",
+        name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
     )
 
 
@@ -62,6 +63,7 @@ class FoxESSChargingSwitch(SwitchEntity):
         if success:
             self._coordinator.data["status"] = 3
             self.async_write_ha_state()
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -71,6 +73,7 @@ class FoxESSChargingSwitch(SwitchEntity):
         if success:
             self._coordinator.data["status"] = 5
             self.async_write_ha_state()
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
 
@@ -104,6 +107,7 @@ class FoxESSLockSwitch(SwitchEntity):
         if not success:
             _LOGGER.error("FoxESS Lock: Write FAILED")
         # Kein optimistisches Update – echter Wert vom Gerät abwarten
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -114,12 +118,16 @@ class FoxESSLockSwitch(SwitchEntity):
         if not success:
             _LOGGER.error("FoxESS Lock: Write FAILED")
         # Kein optimistisches Update – echter Wert vom Gerät abwarten
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
 
 class FoxESSAutoPhaseSwitchSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:auto-fix"
+    # Phase switching requires an external phase-switch-box accessory, which
+    # single-phase A7300P1-E-B-WO hardware does not have.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: FoxESSChargerCoordinator,
                  client: FoxESSModbusClient, entry: ConfigEntry) -> None:
@@ -144,6 +152,7 @@ class FoxESSAutoPhaseSwitchSwitch(SwitchEntity):
         if success:
             self._coordinator.data["auto_phase_switch"] = 1
             self.async_write_ha_state()
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -153,4 +162,5 @@ class FoxESSAutoPhaseSwitchSwitch(SwitchEntity):
         if success:
             self._coordinator.data["auto_phase_switch"] = 0
             self.async_write_ha_state()
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()

@@ -70,7 +70,11 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Modbus error: {err}") from err
 
     def _fetch(self) -> dict:
-        data: dict = {}
+        # Start from the last known-good values instead of a blank dict, so a
+        # single failed register-block read doesn't wipe out everything else
+        # that's still valid (e.g. right after a write, before the charger's
+        # ready to answer the follow-up read).
+        data: dict = dict(self.data) if self.data else {}
 
         # ── 0x1000–0x1015: 22 Status-Register ────────────────────────────────
         regs = self.client.read_registers(0x1000, 22)

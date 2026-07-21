@@ -52,6 +52,7 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
     FoxESSBinarySensorDescription(
         key="auto_phase_switch", name="Auto Phase Switch",
         icon="mdi:auto-fix",
+        entity_registry_enabled_default=False,  # phase-switch-box only
         value_fn=lambda d: d.get("auto_phase_switch") == 1,
     ),
 )
@@ -78,7 +79,7 @@ class FoxESSBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name="FoxESS Charger", manufacturer="FoxESS", model="A011",
+            name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
         )
 
     @property

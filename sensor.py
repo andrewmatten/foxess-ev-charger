@@ -67,6 +67,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
     FoxESSChargerSensorDescription(
         key="phase_sequence", name="Phase Sequence", icon="mdi:electric-switch",
         device_class=SensorDeviceClass.ENUM, options=list(PHASE_SEQ_MAP.values()),
+        entity_registry_enabled_default=False,  # phase-switch-box only
         value_fn=lambda d: PHASE_SEQ_MAP.get(d.get("phase_sequence", 0), "unknown"),
     ),
     FoxESSChargerSensorDescription(
@@ -106,6 +107,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         icon="mdi:flash",
+        entity_registry_enabled_default=False,  # single-phase: no L2
         value_fn=lambda d: round(d.get("l2_voltage_raw", 0) * 0.1, 1),
     ),
     FoxESSChargerSensorDescription(
@@ -114,6 +116,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         icon="mdi:flash",
+        entity_registry_enabled_default=False,  # single-phase: no L3
         value_fn=lambda d: round(d.get("l3_voltage_raw", 0) * 0.1, 1),
     ),
     # ── Ströme ───────────────────────────────────────────────────────────────
@@ -131,6 +134,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         icon="mdi:current-ac",
+        entity_registry_enabled_default=False,  # single-phase: no L2
         value_fn=lambda d: round(d.get("l2_current_raw", 0) * 0.1, 1),
     ),
     FoxESSChargerSensorDescription(
@@ -139,6 +143,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         icon="mdi:current-ac",
+        entity_registry_enabled_default=False,  # single-phase: no L3
         value_fn=lambda d: round(d.get("l3_current_raw", 0) * 0.1, 1),
     ),
     # ── Leistung ─────────────────────────────────────────────────────────────
@@ -212,7 +217,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
 )
 
 DEVICE_INFO_TEMPLATE = DeviceInfo(
-    manufacturer="FoxESS", model="A011 EV Charger",
+    manufacturer="FoxESS", model="A7300P1-E-B-WO",
 )
 
 
@@ -237,7 +242,7 @@ class FoxESSChargerSensor(CoordinatorEntity, SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name="FoxESS Charger", manufacturer="FoxESS", model="A011",
+            name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
         )
 
     @property

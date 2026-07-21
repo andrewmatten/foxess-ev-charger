@@ -1,6 +1,7 @@
 """Number entities for FoxESS EV Charger."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Callable
@@ -47,7 +48,7 @@ NUMBERS: tuple[FoxESSNumberDescription, ...] = (
         key="max_charging_power", name="Max Charging Power",
         icon="mdi:lightning-bolt",
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        native_min_value=0.0, native_max_value=22.0, native_step=0.1,
+        native_min_value=0.0, native_max_value=7.3, native_step=0.1,
         register=REG_MAX_CHARGING_POWER, data_key="max_charging_power_raw",
         scale_to_raw=lambda v: int(round(v * 10)),
         scale_to_ha =lambda v: round(v * 0.1, 1),
@@ -88,6 +89,7 @@ NUMBERS: tuple[FoxESSNumberDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=5, native_max_value=30, native_step=1,
         register=REG_MIN_SWITCH_INTERVAL, data_key="min_switch_interval",
+        entity_registry_enabled_default=False,  # phase-switch-box only
     ),
 )
 
@@ -121,7 +123,7 @@ class FoxESSNumber(NumberEntity):
             identifiers={(DOMAIN, entry.entry_id)},
             name="FoxESS Charger",
             manufacturer="FoxESS",
-            model="A011",
+            model="A7300P1-E-B-WO",
         )  # ← diese schließende Klammer fehlte
 
     @property
@@ -150,4 +152,5 @@ class FoxESSNumber(NumberEntity):
             self.async_write_ha_state()
         else:
             _LOGGER.error("FoxESS: Write failed for %s", desc.key)
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()

@@ -1,6 +1,7 @@
 """Select entities for FoxESS EV Charger."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.select import SelectEntity
@@ -30,7 +31,7 @@ async def async_setup_entry(
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name="FoxESS Charger", manufacturer="FoxESS", model="A011",
+        name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
     )
 
 
@@ -69,12 +70,16 @@ class FoxESSWorkModeSelect(SelectEntity):
             self.async_write_ha_state()
         else:
             _LOGGER.error("FoxESS: Work Mode write FAILED for option=%s", option)
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()
 
 
 class FoxESSPhaseSelect(SelectEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:electric-switch"
+    # Phase switching is only meaningful with an external phase-switch-box
+    # accessory, which single-phase A7300P1-E-B-WO hardware does not have.
+    _attr_entity_registry_enabled_default = False
     _options_map = PHASE_SEQ_MAP
     _reverse_map = {v: k for k, v in PHASE_SEQ_MAP.items()}
 
@@ -107,4 +112,5 @@ class FoxESSPhaseSelect(SelectEntity):
             self.async_write_ha_state()
         else:
             _LOGGER.error("FoxESS: Phase Sequence write FAILED")
+        await asyncio.sleep(1.5)
         await self._coordinator.async_request_refresh()

@@ -17,7 +17,7 @@ CONF_PORT     = "port"
 CONF_SLAVE_ID = "slave_id"
 
 # Defaults
-DEFAULT_PORT          = 1502
+DEFAULT_PORT          = 502
 DEFAULT_SLAVE_ID      = 1
 DEFAULT_SCAN_INTERVAL = 10
 
