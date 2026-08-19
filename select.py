@@ -7,11 +7,10 @@ import logging
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, REG_WORK_MODE, REG_PHASE_SWITCHING, WORK_MODE_MAP, PHASE_SEQ_MAP
-from .__init__ import FoxESSChargerCoordinator
+from .__init__ import FoxESSChargerCoordinator, build_device_info
 from .modbus_client import FoxESSModbusClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,13 +27,6 @@ async def async_setup_entry(
     ])
 
 
-def _device_info(entry: ConfigEntry) -> DeviceInfo:
-    return DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
-        name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
-    )
-
-
 class FoxESSWorkModeSelect(SelectEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:ev-station"
@@ -48,7 +40,7 @@ class FoxESSWorkModeSelect(SelectEntity):
         self._attr_unique_id   = f"{entry.entry_id}_work_mode"
         self._attr_name        = "Work Mode"
         self._attr_options     = list(self._options_map.values())
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:
@@ -90,7 +82,7 @@ class FoxESSPhaseSelect(SelectEntity):
         self._attr_unique_id   = f"{entry.entry_id}_phase_sequence"
         self._attr_name        = "Phase Sequence"
         self._attr_options     = list(self._options_map.values())
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:

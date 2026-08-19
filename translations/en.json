@@ -32,11 +32,14 @@
   },
   "entity": {
     "sensor": {
+      "id_serial_number": {
+        "name": "Serial Number"
+      },
       "status": {
         "state": {
           "idle": "Idle",
           "connected": "Connected",
-          "ready": "Ready",
+          "start": "Starting",
           "charging": "Charging",
           "paused": "Paused",
           "finished": "Finished",

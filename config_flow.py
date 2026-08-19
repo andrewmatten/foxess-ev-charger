@@ -13,6 +13,7 @@ from .const import (
     DOMAIN, CONF_HOST, CONF_PORT, CONF_SLAVE_ID,
     DEFAULT_PORT, DEFAULT_SLAVE_ID, DEFAULT_SCAN_INTERVAL,
 )
+from .modbus_client import FoxESSModbusClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,15 +28,32 @@ class FoxESSChargerConfigFlow(ConfigFlow, domain=DOMAIN):
                 f"{user_input[CONF_HOST]}-{user_input[CONF_SLAVE_ID]}"
             )
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=f"FoxESS Charger ({user_input[CONF_HOST]})",
-                data={
-                    CONF_HOST:     user_input[CONF_HOST],
-                    CONF_PORT:     user_input[CONF_PORT],
-                    CONF_SLAVE_ID: user_input[CONF_SLAVE_ID],
-                },
-                options={"scan_interval": DEFAULT_SCAN_INTERVAL},
+
+            # Validate the connection now, not just after the entry exists -
+            # a bad host/port/slave ID would otherwise only surface later as
+            # silently-unavailable entities with no clear error message.
+            client = FoxESSModbusClient(
+                user_input[CONF_HOST], user_input[CONF_PORT], user_input[CONF_SLAVE_ID]
             )
+            try:
+                regs = await self.hass.async_add_executor_job(
+                    client.read_registers, 0x1000, 1  # Device Address - cheapest real read
+                )
+            finally:
+                await self.hass.async_add_executor_job(client.disconnect)
+
+            if regs is None:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_create_entry(
+                    title=f"FoxESS Charger ({user_input[CONF_HOST]})",
+                    data={
+                        CONF_HOST:     user_input[CONF_HOST],
+                        CONF_PORT:     user_input[CONF_PORT],
+                        CONF_SLAVE_ID: user_input[CONF_SLAVE_ID],
+                    },
+                    options={"scan_interval": DEFAULT_SCAN_INTERVAL},
+                )
 
         return self.async_show_form(
             step_id="user",

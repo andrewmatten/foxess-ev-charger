@@ -19,12 +19,13 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, STATUS_MAP, CP_STATUS_MAP, WORK_MODE_MAP, PHASE_SEQ_MAP, STOP_REASON_MAP
-from .__init__ import FoxESSChargerCoordinator
+from .__init__ import FoxESSChargerCoordinator, build_device_info
 
 
 @dataclass(frozen=True, kw_only=True)
 class FoxESSChargerSensorDescription(SensorEntityDescription):
     value_fn: Callable[[dict], StateType] = lambda _: None
+    attrs_fn: Callable[[dict], dict] = lambda _: {}
 
 
 SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
@@ -36,6 +37,10 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
     FoxESSChargerSensorDescription(
         key="device_address", name="Device Address", icon="mdi:identifier",
         value_fn=lambda d: d.get("device_address"),
+    ),
+    FoxESSChargerSensorDescription(
+        key="id_serial_number", name="Serial Number", icon="mdi:card-account-details-outline",
+        value_fn=lambda d: d.get("id_serial_number"),
     ),
     # ── Status ───────────────────────────────────────────────────────────────
     FoxESSChargerSensorDescription(
@@ -205,21 +210,18 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
     FoxESSChargerSensorDescription(
         key="alarm_code", name="Alarm Code", icon="mdi:alert",
         value_fn=lambda d: d.get("alarm_code"),
+        attrs_fn=lambda d: {"active_alarms": d.get("active_alarms", [])},
     ),
     FoxESSChargerSensorDescription(
         key="fault_code", name="Fault Code", icon="mdi:alert-circle",
         value_fn=lambda d: d.get("fault_code"),
+        attrs_fn=lambda d: {"active_faults": d.get("active_faults", [])},
     ),
     FoxESSChargerSensorDescription(
         key="rfid_card", name="RFID Card", icon="mdi:card-account-details",
         value_fn=lambda d: f"{d.get('rfid_card',0):08X}" if d.get("rfid_card", 0) > 0 else "None",
     ),
 )
-
-DEVICE_INFO_TEMPLATE = DeviceInfo(
-    manufacturer="FoxESS", model="A7300P1-E-B-WO",
-)
-
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry,
@@ -240,13 +242,16 @@ class FoxESSChargerSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
-        )
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def native_value(self) -> StateType:
         if self.coordinator.data and self.entity_description.value_fn:
             return self.entity_description.value_fn(self.coordinator.data)
         return None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        if self.coordinator.data:
+            return self.entity_description.attrs_fn(self.coordinator.data)
+        return {}

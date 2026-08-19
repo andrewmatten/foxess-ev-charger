@@ -10,7 +10,6 @@ from homeassistant.components.number import NumberEntity, NumberEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfElectricCurrent, UnitOfPower, UnitOfTime, UnitOfEnergy
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -20,7 +19,7 @@ from .const import (
     REG_TIME_VALIDITY,        REG_DEFAULT_CURRENT,
     REG_MIN_SWITCH_INTERVAL,
 )
-from .__init__ import FoxESSChargerCoordinator
+from .__init__ import FoxESSChargerCoordinator, build_device_info
 from .modbus_client import FoxESSModbusClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,12 +118,7 @@ class FoxESSNumber(NumberEntity):
         self._client      = client
         self.entity_description = description
         self._attr_unique_id   = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="FoxESS Charger",
-            manufacturer="FoxESS",
-            model="A7300P1-E-B-WO",
-        )  # ← diese schließende Klammer fehlte
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:

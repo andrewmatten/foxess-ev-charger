@@ -7,11 +7,10 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, REG_CHARGING_CONTROL, REG_LOCK_CONTROL, REG_AUTO_PHASE_SWITCH
-from .__init__ import FoxESSChargerCoordinator
+from .__init__ import FoxESSChargerCoordinator, build_device_info
 from .modbus_client import FoxESSModbusClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,13 +28,6 @@ async def async_setup_entry(
     ])
 
 
-def _device_info(entry: ConfigEntry) -> DeviceInfo:
-    return DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
-        name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
-    )
-
-
 class FoxESSChargingSwitch(SwitchEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:ev-plug-type2"
@@ -46,7 +38,7 @@ class FoxESSChargingSwitch(SwitchEntity):
         self._client      = client
         self._attr_unique_id   = f"{entry.entry_id}_charging"
         self._attr_name        = "Charging"
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:
@@ -54,7 +46,10 @@ class FoxESSChargingSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return (self._coordinator.data or {}).get("status") in (2, 3)
+        # 2=start, 3=charging, 4=pause (suspended by the car, not by a stop
+        # command - the session is still active and will resume on its own,
+        # so it should read as "on" rather than looking identical to stopped).
+        return (self._coordinator.data or {}).get("status") in (2, 3, 4)
 
     async def async_turn_on(self, **kwargs) -> None:
         success = await self.hass.async_add_executor_job(
@@ -87,7 +82,7 @@ class FoxESSLockSwitch(SwitchEntity):
         self._client      = client
         self._attr_unique_id   = f"{entry.entry_id}_lock"
         self._attr_name        = "Lock"
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:
@@ -95,7 +90,7 @@ class FoxESSLockSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        # 0x100F: 0 = unlocked, alles andere = locked (Bitmask/Mehrfachwert)
+        # 0x100F: 0 = unlocked, 1 = locked (simple 2-value enum per spec)
         val = (self._coordinator.data or {}).get("lock_status")
         return val not in (None, 0)
 
@@ -135,7 +130,7 @@ class FoxESSAutoPhaseSwitchSwitch(SwitchEntity):
         self._client      = client
         self._attr_unique_id   = f"{entry.entry_id}_auto_phase_switch"
         self._attr_name        = "Auto Phase Switch"
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def available(self) -> bool:

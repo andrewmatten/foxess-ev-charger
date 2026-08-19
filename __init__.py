@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -17,6 +18,22 @@ from .const import (
 from .modbus_client import FoxESSModbusClient
 
 _LOGGER = logging.getLogger(__name__)
+
+DEFAULT_MODEL = "A7300P1-E-B-WO"
+
+
+def build_device_info(entry: ConfigEntry, coordinator: "FoxESSChargerCoordinator") -> DeviceInfo:
+    """Builds DeviceInfo with the model read from the charger (0x101E) when
+    available, falling back to the default single-phase model string only
+    if the device hasn't answered yet. Single source of truth instead of
+    the same literal repeated in every platform file."""
+    model = (coordinator.data or {}).get("id_model_code") or DEFAULT_MODEL
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="FoxESS Charger",
+        manufacturer="FoxESS",
+        model=model,
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

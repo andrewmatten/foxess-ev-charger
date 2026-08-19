@@ -38,12 +38,15 @@
       "device_address": {
         "name": "Geräteadresse"
       },
+      "id_serial_number": {
+        "name": "Seriennummer"
+      },
       "status": {
         "name": "Status",
         "state": {
           "idle": "Inaktiv",
           "connected": "Verbunden",
-          "ready": "Bereit",
+          "start": "Startet",
           "charging": "Lädt",
           "paused": "Pausiert",
           "finished": "Beendet",

@@ -9,12 +9,11 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .__init__ import FoxESSChargerCoordinator
+from .__init__ import FoxESSChargerCoordinator, build_device_info
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -77,10 +76,7 @@ class FoxESSBinarySensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="FoxESS Charger", manufacturer="FoxESS", model="A7300P1-E-B-WO",
-        )
+        self._attr_device_info = build_device_info(entry, coordinator)
 
     @property
     def is_on(self) -> bool | None:
