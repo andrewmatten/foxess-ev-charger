@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.1
+
+**Fixed**
+- `Allowed Charge Time` / `Allowed Charge Energy` now show blank instead of the literal `65535` sentinel value when the charger reports "no limit set" (idle, no active session). The values were always correct per spec, just displayed unhelpfully - `native_max_value` on both sliders already made it impossible to ever *write* 65535 through this integration, so this only affects the read/display side.
+
 ## 2.1.0
 
 **Reliability**

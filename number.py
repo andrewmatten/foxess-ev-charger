@@ -27,10 +27,11 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True, kw_only=True)
 class FoxESSNumberDescription(NumberEntityDescription):
-    register:     int                     = 0
-    data_key:     str                     = ""
-    scale_to_raw: Callable[[float], int]  = lambda v: int(v)
-    scale_to_ha:  Callable[[int], float]  = lambda v: float(v)
+    register:       int                    = 0
+    data_key:       str                    = ""
+    scale_to_raw:   Callable[[float], int] = lambda v: int(v)
+    scale_to_ha:    Callable[[int], float] = lambda v: float(v)
+    blank_sentinel: int | None             = None
 
 
 NUMBERS: tuple[FoxESSNumberDescription, ...] = (
@@ -58,6 +59,7 @@ NUMBERS: tuple[FoxESSNumberDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=0, native_max_value=1440, native_step=1,
         register=REG_ALLOWED_CHARGE_TIME, data_key="allowed_charge_time",
+        blank_sentinel=0xFFFF,  # 65535 = "no limit set" per spec, not a real value
     ),
     FoxESSNumberDescription(
         key="allowed_charge_energy", name="Allowed Charge Energy",
@@ -65,6 +67,7 @@ NUMBERS: tuple[FoxESSNumberDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         native_min_value=0, native_max_value=999, native_step=1,
         register=REG_ALLOWED_CHARGE_ENERGY, data_key="allowed_charge_energy",
+        blank_sentinel=0xFFFF,  # 65535 = "no limit set" per spec, not a real value
     ),
     FoxESSNumberDescription(
         key="time_validity", name="Command Time Validity",
@@ -126,10 +129,11 @@ class FoxESSNumber(NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        raw = (self._coordinator.data or {}).get(self.entity_description.data_key)
-        if raw is None:
+        desc = self.entity_description
+        raw  = (self._coordinator.data or {}).get(desc.data_key)
+        if raw is None or raw == desc.blank_sentinel:
             return None
-        return self.entity_description.scale_to_ha(raw)
+        return desc.scale_to_ha(raw)
 
     async def async_set_native_value(self, value: float) -> None:
         desc = self.entity_description
