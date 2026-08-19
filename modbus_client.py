@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -16,13 +17,26 @@ WRITE_ONLY_REGISTERS = {0x4000, 0x4001, 0x4002, 0x4003}
 
 
 class FoxESSModbusClient:
-    """Minimal Modbus TCP client (raw sockets, kein pymodbus)."""
+    """Minimal Modbus TCP client (raw sockets, kein pymodbus).
+
+    Holds one persistent TCP connection, reused across reads/writes, instead
+    of opening a fresh connection per call. A single poll cycle issues several
+    register reads - reconnecting for every one of them adds needless TCP
+    handshake overhead and load on the charger's embedded stack. The socket
+    is protected by a lock because reads (from the coordinator's poll loop)
+    and writes (from switch/number/select entities) run as independent
+    executor jobs and could otherwise land on different threads at once.
+    Any send/recv failure closes and clears the socket so the next call
+    reconnects cleanly rather than reusing a broken connection.
+    """
 
     def __init__(self, host: str, port: int, slave_id: int) -> None:
         self._host      = host
         self._port      = port
         self._slave_id  = slave_id
         self._tid       = 0
+        self._sock: socket.socket | None = None
+        self._lock       = threading.Lock()
 
     # ── Interne Hilfsmethoden ─────────────────────────────────────────────────
 
@@ -30,14 +44,31 @@ class FoxESSModbusClient:
         self._tid = (self._tid + 1) % 0xFFFF
         return self._tid
 
+    def _ensure_connected(self, timeout: float) -> socket.socket:
+        if self._sock is None:
+            self._sock = socket.create_connection((self._host, self._port), timeout=timeout)
+        else:
+            self._sock.settimeout(timeout)
+        return self._sock
+
+    def _close(self) -> None:
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
     def _send_recv(self, request: bytes, timeout: float = 5.0) -> bytes | None:
-        try:
-            with socket.create_connection((self._host, self._port), timeout=timeout) as sock:
+        with self._lock:
+            try:
+                sock = self._ensure_connected(timeout)
                 sock.sendall(request)
                 return sock.recv(1024)
-        except Exception as ex:
-            _LOGGER.error("Modbus TCP %s:%s – Verbindungsfehler: %s", self._host, self._port, ex)
-            return None
+            except Exception as ex:
+                _LOGGER.error("Modbus TCP %s:%s – Verbindungsfehler: %s", self._host, self._port, ex)
+                self._close()
+                return None
 
     def _build_mbap(self, pdu: bytes) -> bytes:
         """Baut den vollständigen Modbus TCP ADU (MBAP + PDU)."""
@@ -92,6 +123,20 @@ class FoxESSModbusClient:
         if regs and len(regs) >= 2:
             return (regs[0] << 16) | regs[1]
         return None
+
+    def read_ascii(self, address: int, reg_count: int) -> str | None:
+        """Liest `reg_count` Register ab `address` und dekodiert sie als
+        ASCII-String (zwei Zeichen pro Register, big-endian, rechtsseitig
+        mit Nullbytes aufgefüllt - z.B. Id Model Code 0x101E, Id Serial
+        Number 0x1022)."""
+        regs = self.read_registers(address, reg_count)
+        if regs is None:
+            return None
+        raw = bytearray()
+        for reg in regs:
+            raw.append((reg >> 8) & 0xFF)
+            raw.append(reg & 0xFF)
+        return raw.decode("ascii", errors="replace").rstrip("\x00").strip()
 
     def write_holding_register(self, address: int, value: int) -> bool:
         """
@@ -166,5 +211,6 @@ class FoxESSModbusClient:
         return success
 
     def disconnect(self) -> None:
-        """Kein persistenter Socket – nichts zu schließen."""
-        pass
+        """Schließt die persistente Verbindung, falls vorhanden."""
+        with self._lock:
+            self._close()

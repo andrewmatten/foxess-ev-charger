@@ -12,6 +12,7 @@ from .const import (
     DOMAIN, PLATFORMS,
     CONF_HOST, CONF_PORT, CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
+    FAULT_BITS, ALARM_BITS, decode_bitmask,
 )
 from .modbus_client import FoxESSModbusClient
 
@@ -144,5 +145,24 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             data["min_switch_interval"] = phase_cfg[1]
         else:
             _LOGGER.debug("Could not read phase-switch-box registers 0x300A–0x300B (expected on single-phase hardware)")
+
+        # ── 0x101E/0x1022: Id Model Code / Id Serial Number (ASCII, static) ────
+        # Read once and cached forever via the seed-from-last-known-good
+        # pattern above - these don't change, no need to re-poll every cycle.
+        if not data.get("id_model_code"):
+            model = self.client.read_ascii(0x101E, 4)
+            if model:
+                data["id_model_code"] = model
+        if not data.get("id_serial_number"):
+            serial = self.client.read_ascii(0x1022, 16)
+            if serial:
+                data["id_serial_number"] = serial
+
+        # ── Fault/Alarm bitmask decode ──────────────────────────────────────────
+        # fault_code/alarm_code are bitmasks (Appendix 2/3) - multiple
+        # conditions can be active at once. Decode into readable name lists
+        # for the sensors' extra_state_attributes instead of a raw integer.
+        data["active_faults"] = decode_bitmask(data.get("fault_code"), FAULT_BITS)
+        data["active_alarms"] = decode_bitmask(data.get("alarm_code"), ALARM_BITS)
 
         return data
