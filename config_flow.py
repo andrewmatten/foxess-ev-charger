@@ -87,6 +87,8 @@ class FoxESSChargerOptionsFlow(OptionsFlow):
             interval = user_input.get("scan_interval", DEFAULT_SCAN_INTERVAL)
             if interval < 5:
                 errors["base"] = "scan_interval_too_low"
+            elif interval > 300:
+                errors["base"] = "scan_interval_too_high"
             else:
                 return self.async_create_entry(title="", data={"scan_interval": interval})
 

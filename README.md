@@ -1,6 +1,8 @@
+<p align="center"><img src="logo.png" width="120" alt="FoxESS EV Charger logo"></p>
+
 # FoxESS EV Charger
 
-A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxESS A-Series EV chargers**, communicating locally over **Modbus TCP**. No cloud account required — the integration polls the charger directly on your LAN.
+A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxESS A-Series EV chargers**, communicating locally over **Modbus TCP**. No cloud account required — the integration polls the charger directly on your LAN over a single persistent connection.
 
 ## Supported hardware
 
@@ -41,26 +43,33 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Port      | Modbus TCP port — **default `502`**                |
 | Slave ID  | Modbus unit/slave ID (default `1`)                 |
 
-The scan interval is configurable via the integration options (default 10 s).
+The connection is verified during setup — if the charger can't be reached, you'll see an error on the form immediately rather than a silently-broken entry.
 
-> **Firmware requirement: 1.06 or newer.** Earlier firmware cannot read the configuration register block (`0x3000–0x300B`), so the R/W settings (work mode, current/power limits, etc.) will be unavailable.
+The scan interval is configurable via the integration options (default 10 s, range 5-300 s).
 
 ## Entities exposed
 
 - **select** — Work Mode (Controlled / Plug&Charge / Locked); Phase Sequence *(disabled by default)*.
 - **number** — Max Charging Current, Max Charging Power, Allowed Charge Time, Allowed Charge Energy, Command Time Validity, Default (fallback) Current; Min Phase Switch Interval *(disabled by default)*.
-- **switch** — Charging (start/stop), Lock; Auto Phase Switch *(disabled by default)*.
-- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, port & ambient temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, alarm/fault codes, RFID card; L2/L3 voltage & current and Phase Sequence *(disabled by default)*.
+- **switch** — Charging (start/stop; reads "on" for the *start*, *charging*, and *pause* states — a car-initiated pause is still an active session, not a stopped one), Lock; Auto Phase Switch *(disabled by default)*.
+- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, port & ambient temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, Serial Number, alarm/fault codes, RFID card; L2/L3 voltage & current and Phase Sequence *(disabled by default)*.
+  - The device's **model** is read from the charger itself (register `0x101E`) rather than hardcoded, so the device page shows your actual hardware.
+  - **Alarm Code** and **Fault Code** are bitmask registers — multiple conditions can be active at once. Each sensor carries an `active_alarms` / `active_faults` attribute listing the currently-active condition names (e.g. `["overcurrent", "leakage_current"]`), decoded per the protocol spec's appendix tables, instead of just a raw integer.
 - **binary_sensor** — Charging, Vehicle Connected, Fault, Alarm, Locked; Auto Phase Switch *(disabled by default)*.
 
 ## Known limitations
 
-- **Some settings read blank until a charge session starts.** *Allowed Charge Energy*, *Allowed Charge Time*, *Default Current*, and *Max Charging Current* can show no value until the charger has an active session. This is because the charger reports sentinel/placeholder values on those registers when idle — it is expected behaviour, **not a bug**.
+- **Some settings read as `65535` (0xFFFF) until a charge session starts.** *Allowed Charge Energy* and *Allowed Charge Time* report this sentinel/placeholder value when idle, meaning "no limit set" — it's expected charger behaviour per the protocol spec, not a bug.
+- *Max Charging Current* and *Max Charging Power* only take effect while the charger is in the **charging** state (per the protocol spec) — setting them earlier may be a no-op until a session actually starts, and both reset to the charger's max after each session ends.
 - Three-phase / phase-switch-box features are untested (see *Supported hardware* above).
 
 ## Credits
 
 Forked and adapted from [ringaction/foxess_charger](https://github.com/ringaction/foxess_charger). Thanks to the original author for the groundwork on the FoxESS Modbus protocol.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

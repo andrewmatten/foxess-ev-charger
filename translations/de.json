@@ -28,6 +28,10 @@
           "scan_interval": "Aktualisierungsintervall (Sekunden)"
         }
       }
+    },
+    "error": {
+      "scan_interval_too_low": "Das Aktualisierungsintervall muss mindestens 5 Sekunden betragen.",
+      "scan_interval_too_high": "Das Aktualisierungsintervall darf höchstens 300 Sekunden betragen."
     }
   },
   "entity": {

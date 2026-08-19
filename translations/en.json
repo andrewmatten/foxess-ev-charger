@@ -28,6 +28,10 @@
           "scan_interval": "Scan Interval (seconds)"
         }
       }
+    },
+    "error": {
+      "scan_interval_too_low": "Scan interval must be at least 5 seconds.",
+      "scan_interval_too_high": "Scan interval must be 300 seconds or less."
     }
   },
   "entity": {
