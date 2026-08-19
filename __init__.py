@@ -115,9 +115,16 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             if val is not None:
                 data[key] = val
 
-        # ── 0x3000–0x300B: R/W Config Register ───────────────────────────────
-        cfg = self.client.read_registers(0x3000, 12)
-        if cfg and len(cfg) >= 12:
+        # ── 0x3000–0x3006: R/W Config Register (single-phase-safe core block) ──
+        # Split from the phase-switch-box block below because a single failed
+        # register in one read fails the *entire* Modbus request (Illegal Data
+        # Address) - on single-phase hardware (e.g. A7300P1-E-B-WO), 0x300A/
+        # 0x300B (phase-switch-box only) don't exist in firmware, which was
+        # taking down this whole block - including work_mode, max charging
+        # current/power, allowed charge time/energy, and time validity - even
+        # though those registers are all readable on their own.
+        cfg = self.client.read_registers(0x3000, 7)
+        if cfg and len(cfg) >= 7:
             data["work_mode"]                = cfg[0]
             data["max_charging_current_raw"] = cfg[1]
             data["max_charging_power_raw"]   = cfg[2]
@@ -125,10 +132,17 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             data["allowed_charge_energy"]    = cfg[4]
             data["time_validity"]            = cfg[5]
             data["default_current_raw"]      = cfg[6]
-            # cfg[7..9] reserviert
-            data["auto_phase_switch"]        = cfg[10]
-            data["min_switch_interval"]      = cfg[11]
         else:
-            _LOGGER.warning("Could not read config registers 0x3000–0x300B")
+            _LOGGER.warning("Could not read config registers 0x3000–0x3006")
+
+        # ── 0x300A–0x300B: Phase-Switch-Box Register (three-phase only) ────────
+        # Expected to fail on single-phase hardware where these registers
+        # aren't implemented - that's fine, it's independent of the read above.
+        phase_cfg = self.client.read_registers(0x300A, 2)
+        if phase_cfg and len(phase_cfg) >= 2:
+            data["auto_phase_switch"]   = phase_cfg[0]
+            data["min_switch_interval"] = phase_cfg[1]
+        else:
+            _LOGGER.debug("Could not read phase-switch-box registers 0x300A–0x300B (expected on single-phase hardware)")
 
         return data
