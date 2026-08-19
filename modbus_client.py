@@ -53,8 +53,14 @@ class FoxESSModbusClient:
 
     # ── Öffentliche Methoden ──────────────────────────────────────────────────
 
-    def read_registers(self, address: int, count: int) -> list[int] | None:
-        """Liest `count` Holding-Register ab `address` (FC 0x03)."""
+    def read_registers(self, address: int, count: int, quiet: bool = False) -> list[int] | None:
+        """Liest `count` Holding-Register ab `address` (FC 0x03).
+
+        `quiet=True` logs an exception response at DEBUG instead of ERROR -
+        for reads that are expected to fail on some hardware (e.g. phase-
+        switch-box registers on single-phase units), so a normal condition
+        doesn't spam the log at ERROR level forever.
+        """
         pdu = (
             FC_READ_HOLDING.to_bytes(1, "big") +
             address.to_bytes(2, "big")         +
@@ -66,7 +72,8 @@ class FoxESSModbusClient:
 
         # Modbus Exception prüfen
         if len(response) >= 9 and response[7] == (FC_READ_HOLDING | 0x80):
-            _LOGGER.error("Modbus FC03 Exception 0x%02X @ 0x%04X", response[8], address)
+            log = _LOGGER.debug if quiet else _LOGGER.error
+            log("Modbus FC03 Exception 0x%02X @ 0x%04X", response[8], address)
             return None
 
         if len(response) < 9:

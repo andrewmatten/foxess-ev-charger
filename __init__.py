@@ -138,7 +138,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # ── 0x300A–0x300B: Phase-Switch-Box Register (three-phase only) ────────
         # Expected to fail on single-phase hardware where these registers
         # aren't implemented - that's fine, it's independent of the read above.
-        phase_cfg = self.client.read_registers(0x300A, 2)
+        phase_cfg = self.client.read_registers(0x300A, 2, quiet=True)
         if phase_cfg and len(phase_cfg) >= 2:
             data["auto_phase_switch"]   = phase_cfg[0]
             data["min_switch_interval"] = phase_cfg[1]
