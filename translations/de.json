@@ -106,7 +106,7 @@
         "name": "Ladeanschluss Temperatur"
       },
       "ambient_temperature": {
-        "name": "Umgebungstemperatur"
+        "name": "Innentemperatur"
       },
       "l1_voltage": {
         "name": "L1 Spannung"

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.2
+
+**Fixed**
+- **`Total Energy` and `Current Session Energy` were reading each other's registers.** `Total` reported *less* than the current session, which is impossible. Confirmed against live hardware: `0x1016` never resets between sessions (lifetime) while `0x1018` starts from zero when charging begins and tracked kW × elapsed time exactly across a 2h13m session. The two constants were also duplicated as magic numbers in the coordinator's read loop, so they now reference `const.py` instead and can't drift apart again.
+- **`Locked` binary sensor showed the exact opposite of the lock state.** Home Assistant's `lock` binary-sensor device class is inverted by design — `on` means *unlocked* — but the sensor returned `on` when the connector was locked. The `Lock Status` sensor and `Lock` switch were always correct; only this entity was wrong.
+
+**Changed**
+- `Ambient Temperature` renamed to **Internal Temperature**. Despite the name used in the protocol spec, it's a board-mounted sensor inside the enclosure, not room air — the same unit read 23.6 °C idle and 55.5 °C while delivering 30 A. Scaling was correct; only the label was misleading.
+- `Port Temperature` is now **disabled by default**. Not all models fit the probe — the A7300P1 returns the `65535` "no sensor" sentinel, leaving the entity permanently `unknown` and looking broken. Enable it manually if your hardware has it. Port over-temperature protection is unaffected either way (fault bit 4).
+
 ## 2.1.1
 
 **Fixed**

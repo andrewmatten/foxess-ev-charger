@@ -46,7 +46,10 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
     FoxESSBinarySensorDescription(
         key="is_locked", name="Locked",
         device_class=BinarySensorDeviceClass.LOCK, icon="mdi:lock",
-        value_fn=lambda d: d.get("lock_status") == 1,
+        # HA's LOCK binary_sensor class is inverted by design: `on` means
+        # *unlocked*, `off` means *locked*. Register 0x100F uses 1=locked, so
+        # this has to return True when the connector is UNlocked.
+        value_fn=lambda d: d.get("lock_status") == 0,
     ),
     FoxESSBinarySensorDescription(
         key="auto_phase_switch", name="Auto Phase Switch",

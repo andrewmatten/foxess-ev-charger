@@ -14,6 +14,7 @@ from .const import (
     CONF_HOST, CONF_PORT, CONF_SLAVE_ID,
     DEFAULT_SCAN_INTERVAL,
     FAULT_BITS, ALARM_BITS, decode_bitmask,
+    REG_TOTAL_ENERGY, REG_CURRENT_ENERGY, REG_FAULT_CODE, REG_RFID_CARD,
 )
 from .modbus_client import FoxESSModbusClient
 
@@ -123,11 +124,14 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Could not read status registers 0x1000–0x1015")
 
         # ── 0x1016/0x1018/0x101A/0x101C: UINT32 Register ─────────────────────
+        # Addresses come from const.py rather than literals here - these were
+        # duplicated as magic numbers until 2.1.2, so fixing the swapped energy
+        # registers in const.py alone had no effect on what was actually read.
         for key, addr in [
-            ("current_energy_raw", 0x1016),
-            ("total_energy_raw",   0x1018),
-            ("fault_code",         0x101A),
-            ("rfid_card",          0x101C),
+            ("total_energy_raw",   REG_TOTAL_ENERGY),
+            ("current_energy_raw", REG_CURRENT_ENERGY),
+            ("fault_code",         REG_FAULT_CODE),
+            ("rfid_card",          REG_RFID_CARD),
         ]:
             val = self.client.read_uint32(addr)
             if val is not None:

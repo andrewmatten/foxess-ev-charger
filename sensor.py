@@ -86,11 +86,21 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         icon="mdi:thermometer",
+        # Not fitted on every model - the A7300P1 reports the 65535 "no sensor"
+        # sentinel here, so this sits permanently at `unknown` and looks broken.
+        # Disabled by default; enable it manually if your hardware has the probe.
+        # Port over-temperature protection still exists in firmware regardless
+        # (fault bit 4, charging_port_overtemp) - only the reading is absent.
+        entity_registry_enabled_default=False,
         value_fn=lambda d: round(d["port_temp_raw"] * 0.1 - 50, 1)
             if d.get("port_temp_raw") not in (None, 65535) else None,
     ),
     FoxESSChargerSensorDescription(
-        key="ambient_temperature", name="Ambient Temperature",
+        # Named "Ambient" in the protocol spec, but it is a board-mounted sensor
+        # inside the enclosure, not room air: measured 23.6 C idle and 55.5 C
+        # while delivering 30 A on the same unit, same afternoon. Reported as
+        # internal temperature so the value isn't mistaken for the garage.
+        key="ambient_temperature", name="Internal Temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,

@@ -52,14 +52,16 @@ The scan interval is configurable via the integration options (default 10 s, ran
 - **select** — Work Mode (Controlled / Plug&Charge / Locked); Phase Sequence *(disabled by default)*.
 - **number** — Max Charging Current, Max Charging Power, Allowed Charge Time, Allowed Charge Energy, Command Time Validity, Default (fallback) Current; Min Phase Switch Interval *(disabled by default)*.
 - **switch** — Charging (start/stop; reads "on" for the *start*, *charging*, and *pause* states — a car-initiated pause is still an active session, not a stopped one), Lock; Auto Phase Switch *(disabled by default)*.
-- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, port & ambient temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, Serial Number, alarm/fault codes, RFID card; L2/L3 voltage & current and Phase Sequence *(disabled by default)*.
+- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, internal temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, Serial Number, alarm/fault codes, RFID card; Port Temperature, L2/L3 voltage & current and Phase Sequence *(disabled by default)*.
+  - **Internal Temperature** is the enclosure's board sensor, not room air — expect it to climb well above ambient under load (23.6 °C idle vs 55.5 °C at 30 A on the same unit).
   - The device's **model** is read from the charger itself (register `0x101E`) rather than hardcoded, so the device page shows your actual hardware.
   - **Alarm Code** and **Fault Code** are bitmask registers — multiple conditions can be active at once. Each sensor carries an `active_alarms` / `active_faults` attribute listing the currently-active condition names (e.g. `["overcurrent", "leakage_current"]`), decoded per the protocol spec's appendix tables, instead of just a raw integer.
 - **binary_sensor** — Charging, Vehicle Connected, Fault, Alarm, Locked; Auto Phase Switch *(disabled by default)*.
 
 ## Known limitations
 
-- **Some settings read as `65535` (0xFFFF) until a charge session starts.** *Allowed Charge Energy* and *Allowed Charge Time* report this sentinel/placeholder value when idle, meaning "no limit set" — it's expected charger behaviour per the protocol spec, not a bug.
+- **Some settings read as `65535` (0xFFFF) until a charge session starts.** *Allowed Charge Energy* and *Allowed Charge Time* report this sentinel/placeholder value when idle, meaning "no limit set" — it's expected charger behaviour per the protocol spec, not a bug. These display blank rather than `65535`.
+- **Port Temperature is not fitted on all models.** The A7300P1 returns the same `65535` sentinel, so the entity is disabled by default. Port over-temperature protection still works in firmware (fault bit 4) — only the live reading is missing.
 - *Max Charging Current* and *Max Charging Power* only take effect while the charger is in the **charging** state (per the protocol spec) — setting them earlier may be a no-op until a session actually starts, and both reset to the charger's max after each session ends.
 - Three-phase / phase-switch-box features are untested (see *Supported hardware* above).
 

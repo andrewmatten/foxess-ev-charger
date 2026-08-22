@@ -44,8 +44,13 @@ REG_MIN_POWER       = 0x1012
 REG_MAX_CURRENT     = 0x1013
 REG_MIN_CURRENT     = 0x1014
 REG_ALARM_CODE      = 0x1015
-REG_CURRENT_ENERGY  = 0x1016  # UINT32 (2 Register)
-REG_TOTAL_ENERGY    = 0x1018  # UINT32 (2 Register)
+# These two were swapped until 2.1.2. Confirmed against live hardware: the
+# register at 0x1016 never resets between sessions (lifetime), while 0x1018
+# starts from zero each time charging begins and tracked kW x elapsed time
+# exactly over a 2h13m session. The old mapping made Total read *lower* than
+# the current session, which is impossible.
+REG_TOTAL_ENERGY    = 0x1016  # UINT32 (2 Register) - lifetime, never resets
+REG_CURRENT_ENERGY  = 0x1018  # UINT32 (2 Register) - resets each session
 REG_FAULT_CODE      = 0x101A  # UINT32 (2 Register)
 REG_RFID_CARD       = 0x101C  # UINT32 (2 Register)
 REG_ID_MODEL_CODE   = 0x101E  # ASCII (4 Register / 8 Bytes)
