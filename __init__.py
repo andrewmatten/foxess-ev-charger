@@ -209,9 +209,20 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # ready to answer the follow-up read).
         data: dict = dict(self.data) if self.data else {}
 
-        # ── 0x1000–0x1015: 22 Status-Register ────────────────────────────────
-        regs = self.client.read_registers(0x1000, 22)
-        if regs and len(regs) >= 22:
+        # ── 0x1000–0x1008: 9 core status registers (all hardware) ───────────
+        # L2/L3 voltage/current (0x1009/0x100A/0x100C/0x100D) used to be read
+        # in the same single 22-register request as everything else here.
+        # On single-phase hardware those four registers don't exist, and
+        # Modbus TCP fails the ENTIRE request the moment it touches even one
+        # invalid address in the range - so the other 18 perfectly valid
+        # registers (status, cp_status, cc_status, temperatures, L1 readings,
+        # lock status, etc.) went dark too, every single poll cycle. This is
+        # the exact same failure class already fixed once below for the
+        # phase-switch-box registers (0x300A/0x300B) - just never applied to
+        # this block. Splitting around the four three-phase-only registers
+        # isolates them the same way.
+        regs = self.client.read_registers(0x1000, 9)
+        if regs and len(regs) >= 9:
             data["device_address"]  = regs[0]
             data["software_version"]= regs[1]
             data["stop_reason"]     = regs[2]
@@ -221,21 +232,55 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             data["port_temp_raw"]   = regs[6]
             data["ambient_temp_raw"]= regs[7]
             data["l1_voltage_raw"]  = regs[8]
-            data["l2_voltage_raw"]  = regs[9]
-            data["l3_voltage_raw"]  = regs[10]
-            data["l1_current_raw"]  = regs[11]
-            data["l2_current_raw"]  = regs[12]
-            data["l3_current_raw"]  = regs[13]
-            data["power_raw"]       = regs[14]
-            data["lock_status"]     = regs[15]
-            data["phase_sequence"]  = regs[16]
-            data["max_power_raw"]   = regs[17]
-            data["min_power_raw"]   = regs[18]
-            data["max_current_raw"] = regs[19]
-            data["min_current_raw"] = regs[20]
-            data["alarm_code"]      = regs[21]
         else:
-            _LOGGER.warning("Could not read status registers 0x1000–0x1015")
+            _LOGGER.warning("Could not read status registers 0x1000–0x1008")
+
+        # ── 0x1009–0x100A: L2/L3 voltage (three-phase hardware only) ────────
+        l23v = self.client.read_registers(0x1009, 2, quiet=True)
+        if l23v and len(l23v) >= 2:
+            data["l2_voltage_raw"] = l23v[0]
+            data["l3_voltage_raw"] = l23v[1]
+        else:
+            _LOGGER.debug(
+                "Could not read L2/L3 voltage registers 0x1009–0x100A "
+                "(expected on single-phase hardware)"
+            )
+
+        # ── 0x100B: L1 current (all hardware) ────────────────────────────────
+        # Its own single-register read because it sits directly between the
+        # L2/L3 voltage and L2/L3 current registers above/below - there's no
+        # contiguous span that includes it but excludes both phase-specific
+        # pairs.
+        l1c = self.client.read_registers(0x100B, 1)
+        if l1c and len(l1c) >= 1:
+            data["l1_current_raw"] = l1c[0]
+        else:
+            _LOGGER.warning("Could not read L1 current register 0x100B")
+
+        # ── 0x100C–0x100D: L2/L3 current (three-phase hardware only) ────────
+        l23c = self.client.read_registers(0x100C, 2, quiet=True)
+        if l23c and len(l23c) >= 2:
+            data["l2_current_raw"] = l23c[0]
+            data["l3_current_raw"] = l23c[1]
+        else:
+            _LOGGER.debug(
+                "Could not read L2/L3 current registers 0x100C–0x100D "
+                "(expected on single-phase hardware)"
+            )
+
+        # ── 0x100E–0x1015: 8 remaining core status registers (all hardware) ──
+        regs2 = self.client.read_registers(0x100E, 8)
+        if regs2 and len(regs2) >= 8:
+            data["power_raw"]       = regs2[0]
+            data["lock_status"]     = regs2[1]
+            data["phase_sequence"]  = regs2[2]
+            data["max_power_raw"]   = regs2[3]
+            data["min_power_raw"]   = regs2[4]
+            data["max_current_raw"] = regs2[5]
+            data["min_current_raw"] = regs2[6]
+            data["alarm_code"]      = regs2[7]
+        else:
+            _LOGGER.warning("Could not read status registers 0x100E–0x1015")
 
         # ── 0x1016/0x1018/0x101A/0x101C: UINT32 Register ─────────────────────
         # Addresses come from const.py rather than literals here - these were
