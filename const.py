@@ -86,6 +86,15 @@ STATUS_MAP = {
     8: "locked",
 }
 
+# Session states where a max-power/current limit is actually in force and
+# needs to be kept alive. Mirrors FoxESSChargingSwitch.is_on's definition of
+# "on" in switch.py - kept as one shared constant so the two can't drift
+# apart. Deliberately excludes "finished" (5): once the Charging switch has
+# stopped a session, re-asserting a nonzero limit here would itself resume
+# charging on FoxESS firmware, which treats a max-power/current write as an
+# implicit resume command, not a passive limit.
+ACTIVE_CHARGING_STATUSES = (2, 3, 4)  # start, charging, paused-by-car
+
 CP_STATUS_MAP = {
     0: "fault",
     1: "12v_disconnected",

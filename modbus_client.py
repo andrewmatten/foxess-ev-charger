@@ -64,11 +64,52 @@ class FoxESSModbusClient:
             try:
                 sock = self._ensure_connected(timeout)
                 sock.sendall(request)
-                return sock.recv(1024)
+                return self._recv_full_response(sock)
             except Exception as ex:
                 _LOGGER.error("Modbus TCP %s:%s – Verbindungsfehler: %s", self._host, self._port, ex)
                 self._close()
                 return None
+
+    def _recv_full_response(self, sock: socket.socket) -> bytes:
+        """Reads exactly one full Modbus TCP ADU, however many TCP segments
+        it arrives in.
+
+        A single recv() call is NOT guaranteed to return a complete
+        response - TCP is a byte stream, not a message stream, and small or
+        embedded stacks (like a charger's) commonly flush a header before
+        the body is fully assembled. The old code called sock.recv(1024)
+        exactly once, so a response split across two segments (e.g. the
+        7-byte MBAP header arriving separately from the PDU echo) was
+        silently truncated - a real, accepted write would then be reported
+        as a failed one purely because of how the bytes happened to arrive.
+
+        The MBAP header's own Length field says exactly how many bytes
+        follow it, so we read until we actually have that many - the
+        standard, protocol-correct way to frame a Modbus TCP response.
+        """
+        header = self._recv_exact(sock, 6)  # transaction id(2) + protocol id(2) + length(2)
+        remaining = int.from_bytes(header[4:6], "big")  # unit id (1) + PDU
+        if not (2 <= remaining <= 254):
+            # Sanity bound (max Modbus PDU is 253 bytes + 1 unit-id byte) -
+            # a garbage/corrupt length field should fail fast, not hang
+            # trying to read an implausible number of bytes.
+            raise ValueError(f"Implausible Modbus response length field: {remaining}")
+        body = self._recv_exact(sock, remaining)
+        return header + body
+
+    def _recv_exact(self, sock: socket.socket, num_bytes: int) -> bytes:
+        """Blocks until exactly num_bytes have been read, looping over
+        multiple recv() calls if needed. Each individual recv() still
+        respects the socket's own timeout (set in _ensure_connected), so a
+        peer that stalls mid-response still fails after `timeout` seconds
+        rather than hanging forever."""
+        chunks = bytearray()
+        while len(chunks) < num_bytes:
+            chunk = sock.recv(num_bytes - len(chunks))
+            if not chunk:
+                raise ConnectionError("Connection closed by peer while reading response")
+            chunks.extend(chunk)
+        return bytes(chunks)
 
     def _build_mbap(self, pdu: bytes) -> bytes:
         """Baut den vollständigen Modbus TCP ADU (MBAP + PDU)."""
