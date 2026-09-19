@@ -8,7 +8,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxE
 
 Currently developed and tested against the **FoxESS A7300P1-E-B-WO** (7.3 kW, single-phase, 32 A max, 230 V).
 
-> **Three-phase models (11 kW / 22 kW) are not yet auto-detected.** The integration exposes the three-phase registers, but the phase-related entities are **disabled by default** because there is no support yet for the external phase-switching-box accessory that those features depend on. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but they are untested.
+> **Three-phase models (11 kW / 22 kW) are untested.** The integration exposes the three-phase registers, but the phase-related entities are **disabled by default** because there is no support yet for the external phase-switching-box accessory that those features depend on. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
 
 Entities disabled by default (phase-switch-box / three-phase only):
 
@@ -50,13 +50,20 @@ The scan interval is configurable via the integration options (default 10 s, ran
 ## Entities exposed
 
 - **select** — Work Mode (Controlled / Plug&Charge / Locked); Phase Sequence *(disabled by default)*.
-- **number** — Max Charging Current, Max Charging Power, Allowed Charge Time, Allowed Charge Energy, Command Time Validity, Default (fallback) Current; Min Phase Switch Interval *(disabled by default)*.
+- **number** — Max Charging Current, Max Charging Power, Allowed Charge Time, Allowed Charge Energy, Command Time Validity, Default (fallback) Current; Min Phase Switch Interval *(disabled by default)*. Max Charging Current/Power's allowed range is derived from the detected model (see *Supported hardware*).
 - **switch** — Charging (start/stop; reads "on" for the *start*, *charging*, and *pause* states — a car-initiated pause is still an active session, not a stopped one), Lock; Auto Phase Switch *(disabled by default)*.
-- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, internal temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, Serial Number, alarm/fault codes, RFID card; Port Temperature, L2/L3 voltage & current and Phase Sequence *(disabled by default)*.
+- **sensor** — Status, CP/CC status, Lock status, Work Mode, Stop Reason, internal temperature, L1 voltage/current, charging power, max/min supported power & current, current-session & total energy, Serial Number, alarm/fault codes, last-completed-session energy/duration (persists across HA restarts); Port Temperature, L2/L3 voltage & current, Phase Sequence, and RFID Card *(disabled by default — card IDs are sensitive)*.
   - **Internal Temperature** is the enclosure's board sensor, not room air — expect it to climb well above ambient under load (23.6 °C idle vs 55.5 °C at 30 A on the same unit).
   - The device's **model** is read from the charger itself (register `0x101E`) rather than hardcoded, so the device page shows your actual hardware.
   - **Alarm Code** and **Fault Code** are bitmask registers — multiple conditions can be active at once. Each sensor carries an `active_alarms` / `active_faults` attribute listing the currently-active condition names (e.g. `["overcurrent", "leakage_current"]`), decoded per the protocol spec's appendix tables, instead of just a raw integer.
+  - Serial Number, Software Version, and Device Address are diagnostic entities.
 - **binary_sensor** — Charging, Vehicle Connected, Fault, Alarm, Locked; Auto Phase Switch *(disabled by default)*.
+
+## Diagnostics, device triggers & blueprint
+
+- **Diagnostics**: download a diagnostics file from the integration's device page (Settings → Devices & Services → FoxESS EV Charger → ⋮ → Download diagnostics) — includes detected model/capabilities, per-block polling health, and Modbus transport error counters. Host/IP and the RFID card value are redacted.
+- **Device triggers**: Vehicle Plugged In, Charging Started, Charging Stopped, Session Completed, Fault, Alarm — available from a device's own trigger picker when building automations, in addition to plain entity state triggers.
+- **Blueprint**: [`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`](blueprints/automation/foxess_charger/solar_surplus_charging.yaml) — holds grid import near a configurable ceiling by adjusting Max Charging Current. Grid-limit/surplus control only; no tariff or cost logic.
 
 ## Known limitations
 

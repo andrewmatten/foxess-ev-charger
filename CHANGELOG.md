@@ -1,5 +1,213 @@
 # Changelog
 
+## 2.4.1
+
+**Fixed**
+- Power-limit writes now allow the charger up to three refreshes to reflect
+  the new setpoint before reporting a mismatch. A request superseded by a
+  newer desired value no longer emits a misleading warning.
+- Test fixtures use documentation-only network addresses.
+
+## 2.3.1
+
+**Fixed** — pre-empted by a second independent review before 2.3.0's heartbeat
+code had run against a real session; all found and fixed before deployment:
+- Heartbeat interval floor (`SETPOINT_REASSERT_MIN_INTERVAL`) lowered 10s→3s -
+  the old floor silently defeated the half-Time-Validity guarantee at exactly
+  the charger's documented minimum (10s), clamping the required ~5s heartbeat
+  back up to 10s.
+- `desired_setpoints` now persists across an HA restart (was in-memory only),
+  bounds-checked against the detected model's capabilities on restore -
+  falls back to the charger's own default current, never to model maximum.
+- Plug & Charge / RFID-initiated sessions (not started via the HA switch) now
+  get heartbeat protection too - previously only HA-initiated sessions did.
+- The heartbeat now also requires the status block (not just config) to be
+  fresh, and suppresses itself entirely while a fault or alarm is active.
+- `_charging_desired` is now only set true after the start command actually
+  succeeds (was optimistic); a failed stop command now restores heartbeat
+  protection instead of leaving a still-running charger unprotected.
+- Closed a stop/heartbeat race with a generation-token check around each
+  register write (before and after) - a stop landing mid-write can no longer
+  have its effects (data patch, re-assertion count) applied after the fact.
+  One residual risk remains and is documented, not solved: a Python executor
+  job already in flight isn't cancellable, so a write already handed to the
+  thread pool can still reach the wire in the narrow window around unload.
+- `desired_setpoints` is now iterated as a snapshot, not the live dict, since
+  a concurrent `number` entity write could otherwise mutate it mid-iteration.
+- Command Time Validity's declared UI range raised 60→255 - live evidence
+  (this charger reports 180) shows the originally-assumed 10-60s spec range
+  doesn't hold for this firmware; the live value is never clamped down.
+- A restart during an active session no longer looks like a fresh session
+  start: `_prev_status` is now persisted and restored (was left `None`),
+  which previously clobbered the just-restored start time/energy baseline.
+- The energy guard's very first reading after setup/reload is no longer
+  trusted unconditionally - an absolute 100,000 kWh plausibility ceiling now
+  applies even to it. `current_energy`'s allow-decrease is no longer
+  unconditional - a mid-session decrease with no genuine session boundary is
+  now rejected like any other implausible reading. A bounded 30-minute
+  rolling-window check now catches sustained one-quantum-per-poll corruption
+  that would otherwise always pass the per-poll floor individually.
+- Modbus responses now also reject a nonzero MBAP Protocol ID, and an FC03
+  response whose declared byte count doesn't exactly match the requested
+  register count - both close/reconnect the same way other framing failures
+  already did.
+- Power-sensor plausibility bounds are now derived from the detected model's
+  capabilities instead of a fixed ~10kW ceiling, which would have rejected
+  genuine readings from the three-phase A011 (11kW) and A022 (22kW) models.
+- `Transport Errors`' state_class corrected `TOTAL_INCREASING`→`MEASUREMENT`
+  - its counters reset on every reload (a fresh client object), which
+  `TOTAL_INCREASING` would have misread as a meter rollover in statistics.
+- The `Session Completed` device trigger now keys off a real completion
+  event instead of diffing the Last Session Duration sensor's value - closes
+  a false-fire on state restoration at startup, and a false-negative for two
+  genuinely consecutive sessions with the same rounded duration. Device
+  triggers no longer offer a disabled entity as a target.
+- Solar Surplus Charging blueprint: the fail-safe stop now bypasses the
+  normal dwell delay, the current/power limit is set before turning charging
+  on (was after, risking a brief full-power window), and an ordinary limit
+  adjustment no longer redundantly re-sends `turn_on`.
+
+## 2.3.0
+
+**Fixed**
+- Setpoint re-assertion's adaptive interval (added just above, this
+  session) still only ever ran inside the poll cycle (`_fetch()`,
+  ~10-13s per `DEFAULT_SCAN_INTERVAL`) - so a Command Time Validity
+  (`0x3005`) configured near its own documented minimum (10s) still
+  couldn't reliably get a write in within the required heartbeat (5s).
+  Re-assertion now also runs on a real independent background task,
+  decoupled from polling entirely - woken immediately when charging
+  starts, a setpoint changes, or Time Validity itself changes, and
+  otherwise firing on its own `get_heartbeat_interval()` schedule. Gated
+  on charging being desired, the charger reporting an active status, and
+  the config register block being fresh, so it never fires against stale
+  or inactive data. The charging switch's stop path now clears the
+  "charging desired" flag as its very first action, before the stop
+  command is even sent - closing a race where an in-flight tick could
+  otherwise re-push the charge-limit registers and, per this firmware's
+  documented behavior, silently resume the very session just stopped.
+  Background heartbeat task design adapted from a third-party PR by
+  github.com/loadrunner42 (PR #2 on `andrewmatten/foxess-ev-charger`), in
+  turn based on the established `evcc-io/evcc` project's own FoxESS
+  driver convention - distinct from the interval-math credit already
+  given for `get_heartbeat_interval()` itself in the previous entry.
+
+## 2.2.0
+
+**Reliability**
+- One register block failing repeatedly (most commonly the phase-switch-box
+  probe on single-phase hardware, or a transient glitch on the config read)
+  used to make *every* entity in the integration go unavailable, because HA's
+  `CoordinatorEntity` base class only knows one coordinator-wide success
+  flag. Each of the three register blocks now tracks its own last-successful-
+  read time; only the entities actually backed by a stale block go
+  unavailable now, and they recover automatically once that block succeeds
+  again. A genuine total connection loss still takes everything unavailable,
+  same as before.
+
+**New**
+- Max Charging Current/Power's allowed range, and the energy plausibility
+  guard's ceiling, are now derived from the charger's own detected model
+  (register `0x101E`) instead of being hardcoded to the single-phase A7300
+  family's 7.3kW/32A. Falls back to those A7300 values for any model that
+  doesn't match, so nothing is ever left undefined.
+- `diagnostics.py`: downloadable config entry diagnostics (Settings →
+  Devices & Services → this integration → Download Diagnostics) - detected
+  model/firmware/capabilities, per-block polling health, and the transport
+  error counters. Host/IP and the RFID card value are redacted.
+- Charging session state (the in-progress session's start time/baseline,
+  and the last-completed session's summary) now survives an HA restart,
+  using HA's standard local storage helper instead of living only in memory.
+- Device triggers: Vehicle Plugged In, Charging Started, Charging Stopped,
+  Session Completed, Fault, Alarm - available when building automations
+  from a device's own trigger picker, not just via entity state triggers.
+- A new automation blueprint, **Solar Surplus Charging**
+  (`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`):
+  raises/lowers Max Charging Current to hold grid import near a configurable
+  ceiling, with hysteresis, a minimum time between adjustments, and a
+  fail-safe stop if the grid sensor goes unavailable. Grid-limit/surplus
+  control only - no tariff or cost logic.
+
+**Fixed**
+- Translations were entirely dead: no entity anywhere set `translation_key`,
+  so `translations/en.json`/`de.json`'s per-entity names and states were
+  never actually used. Now wired up throughout, including several keys that
+  didn't match what the code or the translation files actually contained.
+- The plain Work Mode **sensor**'s state values were the display strings
+  `"Controlled"`/`"Plug&Charge"`/`"Locked"` rather than stable identifiers -
+  fixed to `"controlled"`/`"plug_and_charge"`/`"locked"`. The Work Mode
+  **select**'s `options` intentionally keep the original capitalized
+  strings for now: HA validates `select.select_option` against an entity's
+  declared `options` *before* the entity ever sees the call, so changing
+  them here would silently break any existing automation/script calling
+  `select.select_option` with the old values, with no way for this
+  integration to intercept and translate it after the fact. That migration
+  is deferred to a documented breaking change in a future major version,
+  audited on its own. Phase Sequence's select **did** move to lowercase
+  now (`"L2_single"`/`"L3_single"` -> `"l2_single_phase"`/`"l3_single_phase"`),
+  since it doesn't carry the same undocumented-legacy-value risk.
+- The six enum-valued sensors (Status, CP Status, CC Status, Lock Status,
+  Work Mode, Phase Sequence) now show a real, translated "Unrecognized"
+  state if the charger ever reports a raw value outside what's documented,
+  instead of the same generic native "Unknown" state used for "no reading
+  yet" - the two cases are now distinguishable.
+
+**Changed**
+- Serial Number, Software Version, and Device Address are now marked as
+  diagnostic entities.
+- RFID Card is now disabled by default - card IDs are sensitive.
+
+## 2.1.3
+
+**Reliability**
+- Modbus TCP responses are now read correctly regardless of how the OS
+  chooses to split them across TCP segments. A single `recv()` call used to
+  be trusted to return one whole frame - it isn't guaranteed to on a byte
+  stream - so the client now reads the 7-byte MBAP header first, then reads
+  exactly the number of bytes it declares, looping until each stage is
+  complete. Any incomplete read resets the connection so the next call
+  reconnects cleanly.
+- The response's Unit ID is now checked against the slave ID a request was
+  addressed to (same crossed-wires protection as the existing Transaction
+  ID check), and a response with an unexpected function code is rejected
+  instead of being decoded as if it were the expected one.
+- Writes (`Charging`/`Lock`/`Auto Phase Switch` switches, all `number`/
+  `select` entities) now verify the response actually echoes the function
+  code, address, and value/quantity that were sent, not just that a
+  response of plausible length came back.
+- A failed write now raises an error HA surfaces in the UI and logbook,
+  instead of silently reverting with only a log line. After a successful
+  write, once the next poll completes, a read-back that doesn't match what
+  was written is logged clearly (the charger acknowledged the write but may
+  not have applied it).
+- The `Charging`/`Lock`/`Auto Phase Switch` switches and all `number`/
+  `select` entities now update automatically on every coordinator refresh
+  (previously only on their own writes), matching how the sensors already
+  behaved.
+- The status/energy/fault/RFID register block (0x1000-0x101D) is read in a
+  single Modbus request instead of five separate ones every poll cycle.
+
+**Fixed**
+- Sensors backed by a fixed value map (`Status`, `CP Status`, `CC Status`,
+  `Lock Status`, `Work Mode`, `Phase Sequence`, `Stop Reason`, and the
+  `Work Mode`/`Phase Sequence` selects) now show as unavailable rather than
+  a guessed/wrong label if the charger ever reports a raw value outside
+  what's documented - two of these (`CC Status`, `Lock Status`) previously
+  defaulted to a *specific* state for literally any unrecognized value.
+  `Fault Code`/`Alarm Code`'s active-condition lists now log if the charger
+  ever sets a bit outside the documented appendix tables, instead of
+  silently dropping it.
+- Voltage, current, power, and temperature sensors now report unavailable
+  instead of a physically impossible number (e.g. thousands of volts/amps)
+  if a register read is corrupted - all comfortably outside anything this
+  single-phase 7.3kW/32A hardware can actually produce.
+
+**Internal**
+- First real automated test suite (`pytest-homeassistant-custom-component`)
+  - see `requirements_test.txt`/`tests/`. The energy plausibility guard's
+  decision logic moved into its own dependency-free module (`energy_guard.py`)
+  so it can be tested directly, with no coordinator or HA stubbing needed.
+
 ## 2.1.2
 
 **Fixed**

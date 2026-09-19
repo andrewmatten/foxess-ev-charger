@@ -12,39 +12,46 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
-from .__init__ import FoxESSChargerCoordinator, build_device_info
+from .const import DOMAIN, BLOCK_STATUS, BLOCK_PHASE_BOX
+from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, build_device_info
 
 
 @dataclass(frozen=True, kw_only=True)
 class FoxESSBinarySensorDescription(BinarySensorEntityDescription):
     value_fn: Callable[[dict], bool] = lambda _: False
+    # See FoxESSChargerSensorDescription.block in sensor.py - same mechanism.
+    block: str | None = BLOCK_STATUS
 
 
 BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
     FoxESSBinarySensorDescription(
         key="is_charging", name="Charging",
+        translation_key="is_charging",
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
         icon="mdi:battery-charging",
         value_fn=lambda d: d.get("status") == 3,
     ),
     FoxESSBinarySensorDescription(
         key="vehicle_connected", name="Vehicle Connected",
+        translation_key="vehicle_connected",
         device_class=BinarySensorDeviceClass.PLUG, icon="mdi:power-plug",
         value_fn=lambda d: d.get("cc_status") == 1,
     ),
     FoxESSBinarySensorDescription(
         key="has_fault", name="Fault",
+        translation_key="has_fault",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert-circle",
         value_fn=lambda d: d.get("fault_code", 0) > 0,
     ),
     FoxESSBinarySensorDescription(
         key="has_alarm", name="Alarm",
+        translation_key="has_alarm",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert",
         value_fn=lambda d: d.get("alarm_code", 0) > 0,
     ),
     FoxESSBinarySensorDescription(
         key="is_locked", name="Locked",
+        translation_key="is_locked",
         device_class=BinarySensorDeviceClass.LOCK, icon="mdi:lock",
         # HA's LOCK binary_sensor class is inverted by design: `on` means
         # *unlocked*, `off` means *locked*. Register 0x100F uses 1=locked, so
@@ -53,8 +60,10 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
     ),
     FoxESSBinarySensorDescription(
         key="auto_phase_switch", name="Auto Phase Switch",
+        translation_key="auto_phase_switch",
         icon="mdi:auto-fix",
         entity_registry_enabled_default=False,  # phase-switch-box only
+        block=BLOCK_PHASE_BOX,
         value_fn=lambda d: d.get("auto_phase_switch") == 1,
     ),
 )
@@ -70,7 +79,7 @@ async def async_setup_entry(
     ])
 
 
-class FoxESSBinarySensor(CoordinatorEntity, BinarySensorEntity):
+class FoxESSBinarySensor(FoxESSBlockAvailabilityMixin, CoordinatorEntity, BinarySensorEntity):
     _attr_has_entity_name = True
     entity_description: FoxESSBinarySensorDescription
 
@@ -80,6 +89,7 @@ class FoxESSBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = build_device_info(entry, coordinator)
+        self._block = description.block
 
     @property
     def is_on(self) -> bool | None:

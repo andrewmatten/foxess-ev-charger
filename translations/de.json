@@ -56,7 +56,8 @@
           "finished": "Beendet",
           "fault": "Fehler",
           "reserved": "Reserviert",
-          "locked": "Gesperrt"
+          "locked": "Gesperrt",
+          "unknown": "Unbekannt"
         }
       },
       "cp_status": {
@@ -65,21 +66,24 @@
           "fault": "Fehler",
           "12v_disconnected": "12V (Nicht verbunden)",
           "9v_connected": "9V (Verbunden)",
-          "6v_ready": "6V (Ladebereit)"
+          "6v_ready": "6V (Ladebereit)",
+          "unknown": "Unbekannt"
         }
       },
       "cc_status": {
         "name": "CC Status",
         "state": {
           "disconnected": "Nicht verbunden",
-          "connected": "Verbunden"
+          "connected": "Verbunden",
+          "unknown": "Unbekannt"
         }
       },
       "lock_status": {
         "name": "Schlossstatus",
         "state": {
           "unlocked": "Entsperrt",
-          "locked": "Gesperrt"
+          "locked": "Gesperrt",
+          "unknown": "Unbekannt"
         }
       },
       "work_mode": {
@@ -87,7 +91,8 @@
         "state": {
           "controlled": "Gesteuert",
           "plug_and_charge": "Plug & Charge",
-          "locked": "Gesperrt"
+          "locked": "Gesperrt",
+          "unknown": "Unbekannt"
         }
       },
       "phase_sequence": {
@@ -96,7 +101,7 @@
           "three_phase": "Dreiphasig",
           "l2_single_phase": "L2 (Einphasig)",
           "l3_single_phase": "L3 (Einphasig)",
-          "reserved": "Reserviert"
+          "unknown": "Unbekannt"
         }
       },
       "stop_reason": {
@@ -126,44 +131,26 @@
       "l3_current": {
         "name": "L3 Strom"
       },
-      "total_current": {
-        "name": "Gesamtstrom"
-      },
       "charging_power": {
         "name": "Ladeleistung"
       },
-      "max_power": {
+      "max_supported_power": {
         "name": "Max. unterstützte Leistung"
       },
-      "min_power": {
+      "min_supported_power": {
         "name": "Min. unterstützte Leistung"
       },
-      "max_current": {
+      "max_supported_current": {
         "name": "Max. unterstützter Strom"
       },
-      "min_current": {
+      "min_supported_current": {
         "name": "Min. unterstützter Strom"
       },
-      "default_current": {
-        "name": "Standard-Strom"
-      },
-      "current_energy": {
+      "current_session_energy": {
         "name": "Aktuelle Sitzungsenergie"
       },
       "total_energy": {
         "name": "Gesamtenergie"
-      },
-      "allowed_charge_time": {
-        "name": "Erlaubte Ladezeit"
-      },
-      "allowed_charge_energy": {
-        "name": "Erlaubte Ladeenergie"
-      },
-      "time_validity": {
-        "name": "Zeitgültigkeit"
-      },
-      "min_switch_interval": {
-        "name": "Min. Umschaltintervall"
       },
       "alarm_code": {
         "name": "Alarmcode"
@@ -173,6 +160,15 @@
       },
       "rfid_card": {
         "name": "RFID-Karte"
+      },
+      "last_session_energy": {
+        "name": "Letzte Sitzungsenergie"
+      },
+      "last_session_duration": {
+        "name": "Letzte Sitzungsdauer"
+      },
+      "transport_errors": {
+        "name": "Übertragungsfehler"
       }
     },
     "binary_sensor": {
@@ -190,6 +186,9 @@
       },
       "is_locked": {
         "name": "Gesperrt"
+      },
+      "auto_phase_switch": {
+        "name": "Automatische Phasenumschaltung"
       }
     },
     "number": {
@@ -205,11 +204,11 @@
       "allowed_charge_energy": {
         "name": "Erlaubte Ladeenergie"
       },
-      "default_current": {
-        "name": "Standard-Strom"
-      },
       "time_validity": {
         "name": "Zeitgültigkeit"
+      },
+      "default_current": {
+        "name": "Standard-Strom"
       },
       "min_switch_interval": {
         "name": "Min. Umschaltintervall"
@@ -222,13 +221,6 @@
           "controlled": "Gesteuert",
           "plug_and_charge": "Plug & Charge",
           "locked": "Gesperrt"
-        }
-      },
-      "auto_phase_switch_control": {
-        "name": "Auto Phasenumschaltung",
-        "state": {
-          "disabled": "Deaktiviert",
-          "enabled": "Aktiviert"
         }
       },
       "phase_switching_control": {
@@ -246,6 +238,9 @@
       },
       "lock": {
         "name": "Sperre"
+      },
+      "auto_phase_switch": {
+        "name": "Automatische Phasenumschaltung"
       }
     }
   }
