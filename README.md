@@ -63,7 +63,7 @@ The scan interval is configurable via the integration options (default 10 s, ran
 
 - **Diagnostics**: download a diagnostics file from the integration's device page (Settings → Devices & Services → FoxESS EV Charger → ⋮ → Download diagnostics) — includes detected model/capabilities, per-block polling health, and Modbus transport error counters. Host/IP and the RFID card value are redacted.
 - **Device triggers**: Vehicle Plugged In, Charging Started, Charging Stopped, Session Completed, Fault, Alarm — available from a device's own trigger picker when building automations, in addition to plain entity state triggers.
-- **Blueprint**: [`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`](blueprints/automation/foxess_charger/solar_surplus_charging.yaml) — holds grid import near a configurable ceiling by adjusting Max Charging Current. Grid-limit/surplus control only; no tariff or cost logic.
+- **Blueprint**: [`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`](blueprints/automation/foxess_charger/solar_surplus_charging.yaml) — holds grid import near a configurable ceiling by adjusting Max Charging Current. Its dwell timer is based on actual current changes, so the once-per-minute safety check does not prevent normal adjustments. Grid-limit/surplus control only; no tariff or cost logic.
 
 ## Known limitations
 

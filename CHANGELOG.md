@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.2
+
+**Fixed**
+- Shipped the Solar Surplus Charging automation blueprint that was documented
+  and tested but accidentally omitted from the 2.4.1 release. Its adjustment
+  dwell timer now measures actual Max Charging Current changes rather than
+  the automation's once-per-minute trigger time, so regular surplus
+  adjustments continue to run as intended.
+
 ## 2.4.1
 
 **Fixed**

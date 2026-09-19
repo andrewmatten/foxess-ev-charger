@@ -1,0 +1,267 @@
+# FoxESS EV Charger - Solar Surplus Charging
+#
+# Grid-limit / surplus-based charging control. Adjusts the charger's own
+# Max Charging Current number entity up or down to keep grid import near a
+# configurable ceiling, instead of charging at a fixed rate regardless of
+# how much solar is actually available.
+#
+# Design:
+#   - Triggers on every change of the grid power sensor, plus a once-a-
+#     minute time_pattern safety net (so a sensor that stops updating
+#     doesn't silently freeze the last setpoint forever - it'll still hit
+#     the fail-safe branch below on the next minute tick if it went
+#     unavailable, rather than only reacting to state changes that may
+#     never come).
+#   - Sign convention: the grid power sensor is assumed positive =
+#     importing from the grid, negative = exporting surplus - the
+#     convention most inverter/meter integrations use for a single "grid
+#     power" sensor. Flip "Invert grid power sign" if yours is the other
+#     way around.
+#   - Hysteresis: only acts once import is more than `hysteresis_watts`
+#     above or below the ceiling, so it doesn't hunt/oscillate on every
+#     small fluctuation around the ceiling itself.
+#   - Minimum dwell time between adjustments, measured from the selected
+#     Max Charging Current entity's `last_changed` timestamp rather than the
+#     automation's `last_triggered`. The automation also runs once per minute
+#     as a safety net, so `last_triggered` would continually reset the dwell
+#     timer and eventually wedge all normal adjustments. The entity timestamp
+#     changes only when the setpoint actually changes, providing a plain,
+#     stateless throttle for the charger's embedded Modbus stack.
+#   - Output is clamped to the Max Charging Current entity's own reported
+#     `min`/`max` attributes at runtime, not hardcoded 6/32 A - this keeps
+#     the blueprint correct on three-phase hardware (11kW/16A, 22kW/32A)
+#     where those bounds differ from the single-phase 6-32A default,
+#     falling back to 6/32 only if the entity doesn't report them.
+#   - Below the entity's own minimum, the session is stopped outright
+#     (Charging switch off) rather than writing an out-of-range value -
+#     the charger can't throttle any lower than that per the integration's
+#     own README.
+#   - Fail-safe: if the grid power sensor is unavailable/unknown, charging
+#     is stopped rather than left running at its last-known setpoint with
+#     no visibility into whether that's still appropriate. This bypasses
+#     the minimum-adjustment-delay dwell timer entirely (see the `action`
+#     structure below) - a safety stop must never wait out a throttle meant
+#     only to rate-limit ordinary setpoint tuning.
+#   - When raising current from a stopped session, the new (lower, ramp-up)
+#     current limit is written *before* the charging switch is turned on -
+#     never the other way around - so the session can't briefly start at
+#     whatever setpoint happened to be left over from before it was last
+#     stopped.
+#   - switch.turn_on is only called when the switch is actually off - not
+#     unconditionally on every "raise" adjustment - so a normal setpoint
+#     tuning cycle while already charging doesn't re-issue a redundant start
+#     command every single time.
+#
+# Known limitation, not solved here: this automation can only react to what
+# the grid power sensor *reports*. A sensor that goes truly unavailable is
+# caught by the fail-safe above, but a sensor that's merely stuck/frozen at
+# a stale numeric value - still technically "available", just not updating -
+# looks identical to a real, unchanging surplus and this blueprint has no
+# way to tell the difference without explicit freshness metadata (e.g. a
+# `last_changed`/`last_updated` staleness check), which is out of scope for
+# this pass.
+#
+# Deliberately NOT included, on purpose: tariffs, time-of-use pricing, or
+# any cost logic whatsoever. This is a grid-limit/surplus controller only -
+# pair it with a separate tariff-aware automation if cost-based behaviour
+# is also wanted.
+blueprint:
+  name: FoxESS EV Charger - Solar Surplus Charging
+  description: >
+    Keeps grid import near a target ceiling by raising/lowering the FoxESS
+    EV Charger's Max Charging Current, with hysteresis and a minimum time
+    between actual current changes. A once-per-minute safety check does not
+    reset that dwell timer. Charging stops if the grid sensor goes unavailable.
+    Grid-limit/surplus control only - no tariff or cost logic.
+  domain: automation
+  source_url: https://github.com/andrewmatten/foxess-ev-charger/blob/main/blueprints/automation/foxess_charger/solar_surplus_charging.yaml
+  homeassistant:
+    # The `trigger:`/`condition:`/`action:` (rather than the older
+    # `platform:`/`service:`) automation schema keys used throughout this
+    # blueprint were introduced in HA 2024.10 - a version older than this
+    # would fail to load it at all, so this is a real floor, not a
+    # decorative guess.
+    min_version: "2024.10.0"
+  input:
+    grid_power_sensor:
+      name: Grid Power Sensor
+      description: >
+        Instantaneous grid power in Watts. Positive = importing from the
+        grid, negative = exporting surplus (see "Invert grid power sign"
+        below if yours is the opposite convention).
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    invert_grid_power_sign:
+      name: Invert grid power sign
+      description: Enable if your sensor instead reports positive = exporting.
+      default: false
+      selector:
+        boolean: {}
+    max_current_number:
+      name: Max Charging Current
+      description: The FoxESS EV Charger's Max Charging Current number entity.
+      selector:
+        entity:
+          domain: number
+    charging_switch:
+      name: Charging switch
+      description: >
+        The FoxESS EV Charger's Charging switch. Turned off when the
+        computed current would fall below the charger's own minimum, and
+        back on once surplus recovers.
+      selector:
+        entity:
+          domain: switch
+    import_ceiling_watts:
+      name: Grid import ceiling
+      description: >
+        Target ceiling for grid import. Charging current is raised while
+        import stays below this and lowered while it exceeds this (subject
+        to the hysteresis band below).
+      default: 200
+      selector:
+        number:
+          min: 0
+          max: 5000
+          step: 50
+          unit_of_measurement: W
+    hysteresis_watts:
+      name: Hysteresis
+      description: >
+        Dead band around the import ceiling. No adjustment is made while
+        import is within this range of the ceiling in either direction.
+      default: 150
+      selector:
+        number:
+          min: 0
+          max: 2000
+          step: 25
+          unit_of_measurement: W
+    current_step_amps:
+      name: Adjustment step
+      description: How much to raise/lower Max Charging Current per adjustment.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 8
+          step: 1
+          unit_of_measurement: A
+    min_adjustment_interval:
+      name: Minimum time between adjustments
+      description: >
+        Floor on how often this automation may change the charger's
+        setpoint.
+      default:
+        minutes: 2
+      selector:
+        duration: {}
+
+mode: single
+max_exceeded: silent
+
+variables:
+  grid_power_sensor: !input grid_power_sensor
+  invert_grid_power_sign: !input invert_grid_power_sign
+  max_current_number: !input max_current_number
+  charging_switch: !input charging_switch
+  import_ceiling_watts: !input import_ceiling_watts
+  hysteresis_watts: !input hysteresis_watts
+  current_step_amps: !input current_step_amps
+  min_adjustment_interval: !input min_adjustment_interval
+  min_adjustment_seconds: >
+    {{ (min_adjustment_interval.hours | default(0, true)) * 3600
+       + (min_adjustment_interval.minutes | default(0, true)) * 60
+       + (min_adjustment_interval.seconds | default(0, true))
+       if min_adjustment_interval is mapping
+       else (min_adjustment_interval | int(120)) }}
+
+trigger:
+  - trigger: state
+    entity_id: !input grid_power_sensor
+  - trigger: time_pattern
+    minutes: "/1"
+
+action:
+  - choose:
+      # Fail-safe: sensor unavailable/unknown - stop charging rather than
+      # keep running at a setpoint chosen with no current visibility into
+      # available surplus. Deliberately the *first* thing this automation
+      # checks, before the minimum-adjustment-delay dwell gate below - a
+      # safety stop must never wait out a throttle that exists only to
+      # rate-limit ordinary setpoint tuning.
+      - conditions:
+          - condition: state
+            entity_id: !input grid_power_sensor
+            state: ["unavailable", "unknown"]
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: !input charging_switch
+    default:
+      # Minimum dwell time between adjustments - only gates the normal
+      # raise/lower path below, never the fail-safe stop above. Use the
+      # selected number entity's last_changed timestamp: this automation's
+      # once-per-minute safety trigger updates last_triggered even on no-op
+      # runs, which would otherwise prevent a two-minute dwell from elapsing.
+      # A `condition:` step here (rather than the automation's top-level
+      # `condition:` key) stops just this sequence when false, without ever
+      # gating the fail-safe branch above.
+      - condition: template
+        value_template: >
+          {{ states[max_current_number].last_changed is none or
+             (now() - states[max_current_number].last_changed).total_seconds() >= min_adjustment_seconds }}
+      - variables:
+          raw_grid_power: "{{ states(grid_power_sensor) | float(0) }}"
+          import_power: "{{ (raw_grid_power * -1) if invert_grid_power_sign else raw_grid_power }}"
+          current_amps: "{{ states(max_current_number) | float(6) }}"
+          entity_min: "{{ state_attr(max_current_number, 'min') | float(6) }}"
+          entity_max: "{{ state_attr(max_current_number, 'max') | float(32) }}"
+          switch_is_off: "{{ is_state(charging_switch, 'off') }}"
+      - choose:
+          # Import too high - lower current (or stop if that would go
+          # below the entity's own minimum).
+          - conditions:
+              - "{{ import_power > (import_ceiling_watts + hysteresis_watts) }}"
+            sequence:
+              - variables:
+                  new_amps: "{{ current_amps - current_step_amps }}"
+              - choose:
+                  - conditions:
+                      - "{{ new_amps < entity_min }}"
+                    sequence:
+                      - action: switch.turn_off
+                        target:
+                          entity_id: !input charging_switch
+                default:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input max_current_number
+                    data:
+                      value: "{{ new_amps }}"
+          # Surplus available - raise current, clamped to the entity's own
+          # maximum. The new (lower, ramp-up) limit is written *before* the
+          # switch is turned on - never after - so a currently-stopped
+          # session can never briefly start at whatever setpoint was left
+          # over from before it was last stopped. switch.turn_on itself is
+          # only issued when the switch is actually off, so an ordinary
+          # tuning adjustment while already charging doesn't re-send a
+          # redundant start command every single time.
+          - conditions:
+              - "{{ import_power < (import_ceiling_watts - hysteresis_watts) }}"
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: !input max_current_number
+                data:
+                  value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
+              - if:
+                  - "{{ switch_is_off }}"
+                then:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: !input charging_switch
+        # Within the hysteresis band around the ceiling - no adjustment.
+        default: []
