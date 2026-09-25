@@ -287,6 +287,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # failed block's entities go unavailable without taking every other
         # entity down with them.
         self._block_last_success: dict[str, float] = {}
+        self._block_success_count: dict[str, int] = {}
 
         # Desired setpoints the integration should hold across session
         # boundaries: {register: raw_value}. Populated by number entities on
@@ -301,6 +302,19 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # the next restart instead of the next session.
         self.desired_setpoints: dict[int, int] = {}
         self.setpoint_reasserts = 0
+        # 2.4.3: times a poll during an active, desired session read back a
+        # re-asserted register different from desired_setpoints - i.e. the
+        # charger reverted the cap on its own (the 2026-09-24 91s surge was
+        # invisible to HA because nothing compared the two).
+        self.setpoint_drift_events = 0
+        # 2.4.3: heartbeat writes that failed during an active session, and
+        # the flag that makes the loop retry at SETPOINT_REASSERT_MIN_INTERVAL
+        # instead of waiting a full interval (one missed write at a 30s
+        # interval lands exactly on the firmware's ~60s revert).
+        self.heartbeat_write_failures = 0
+        self._heartbeat_retry_pending = False
+        self.stop_write_failures = 0
+        self.stop_retry_count = 0
 
         # ── Background heartbeat task ────────────────────────────────────
         # Independent of the poll cycle entirely - see _heartbeat_loop()
@@ -368,6 +382,9 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # Core restart mid-inhibit doesn't forget it and treat the very
         # next active poll as legitimate.
         self._stop_inhibit: bool = False
+        # A Stop is complete only after a fresh status read confirms inactivity.
+        self._stop_pending: bool = False
+        self._start_confirmation_pending: bool = False
         self._heartbeat_task: asyncio.Task | None = None
         self._heartbeat_wake_event: asyncio.Event = asyncio.Event()
         # Last time_validity seen by _async_update_data, so it can tell
@@ -435,6 +452,8 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # than have it finish out a sleep duration computed from the old
         # value. This runs on the event loop (unlike _fetch() above, which
         # ran in an executor job) so a direct event.set() is safe here.
+        self._check_setpoint_drift(data)
+
         new_time_validity = data.get("time_validity")
         if new_time_validity != self._last_time_validity:
             self._last_time_validity = new_time_validity
@@ -445,8 +464,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             # synchronously in an executor job and can't await it directly,
             # so the dirty flag it sets is picked up here instead, back on
             # the event loop.
-            await self._async_persist_session_state()
-            self._session_state_dirty = False
+            await self.async_flush_session_state()
 
         if self._setpoints_dirty:
             # Set by number.py's async_set_native_value on a successful
@@ -455,8 +473,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             # triggers via async_request_refresh shortly after) rather than
             # from the entity directly, mirroring _session_state_dirty's
             # pattern above.
-            await self._async_persist_desired_setpoints()
-            self._setpoints_dirty = False
+            await self.async_flush_desired_setpoints()
 
         if self._energy_state_dirty:
             # Set by _sanitize_energy on an accepted-and-changed reading or a
@@ -467,6 +484,33 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             self._energy_state_dirty = False
 
         return data
+
+    def _check_setpoint_drift(self, data: dict) -> None:
+        """2.4.3: compares each re-asserted register as just polled against
+        desired_setpoints while a session is active and desired. A mismatch
+        means the charger dropped the cap on its own (e.g. its Command Time
+        Validity lapsed) - warn, count it, and wake the heartbeat to re-send
+        now rather than at its next scheduled tick. Only trusts a config
+        block read from this very poll."""
+        if not self._charging_desired or data.get("status") not in SESSION_ACTIVE_STATUSES:
+            return
+        if not self.block_is_fresh(BLOCK_CONFIG):
+            return
+        drifted = False
+        for register, desired in self.desired_setpoints.items():
+            key = REASSERTED_DATA_KEYS.get(register)
+            actual = data.get(key) if key else None
+            if actual is not None and actual != desired:
+                drifted = True
+                _LOGGER.warning(
+                    "Setpoint drift on 0x%04X: charger reports %d, desired %d "
+                    "- the charger dropped the cap on its own; re-sending now",
+                    register, actual, desired,
+                )
+        if drifted:
+            self.setpoint_drift_events += 1
+            data["diag_setpoint_drift_events"] = self.setpoint_drift_events
+            self._wake_heartbeat()
 
     # ── Session persistence ───────────────────────────────────────────────────
 
@@ -504,6 +548,10 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # why this needs to survive a restart: a Core restart mid-inhibit
         # must not treat the very next active poll as a legitimate start.
         self._stop_inhibit = bool(stored.get("stop_inhibit", False))
+        self._stop_pending = bool(stored.get("stop_pending", False))
+        if self._stop_pending:
+            self._charging_desired = False
+            self._stop_inhibit = True
 
         start_wall  = stored.get("session_start_wall")
         start_total = stored.get("session_start_total")
@@ -542,7 +590,25 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             "last_session":        self._last_completed_session,
             "prev_status":         self._prev_status,
             "stop_inhibit":        self._stop_inhibit,
+            "stop_pending":        self._stop_pending,
         })
+
+    async def async_flush_session_state(self) -> None:
+        """Persists the current session/inhibit state before teardown or
+        return from a user action; retain dirty if it changes mid-save."""
+        snapshot = (
+            self._session_start_wall, self._session_start_total,
+            self._last_completed_session, self._prev_status,
+            self._stop_inhibit, self._stop_pending,
+        )
+        await self._async_persist_session_state()
+        current = (
+            self._session_start_wall, self._session_start_total,
+            self._last_completed_session, self._prev_status,
+            self._stop_inhibit, self._stop_pending,
+        )
+        if current == snapshot:
+            self._session_state_dirty = False
 
     # ── Desired-setpoint persistence ────────────────────────────────────────
 
@@ -580,6 +646,14 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         await self._setpoints_store.async_save({
             "desired_setpoints": {str(k): v for k, v in self.desired_setpoints.items()},
         })
+
+    async def async_flush_desired_setpoints(self) -> None:
+        """Persists the current staged setpoints and clears dirty only if
+        nothing changed while the storage write was in flight."""
+        snapshot = dict(self.desired_setpoints)
+        await self._async_persist_desired_setpoints()
+        if self.desired_setpoints == snapshot:
+            self._setpoints_dirty = False
 
     async def async_validate_desired_setpoints(self) -> None:
         """Bounds-checks desired_setpoints against the currently detected
@@ -623,6 +697,14 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             if bounds is None:
                 continue
             lo, hi = bounds
+            if not isinstance(value, int) or isinstance(value, bool):
+                _LOGGER.warning(
+                    "Discarding malformed restored desired setpoint 0x%04X=%r",
+                    register, value,
+                )
+                del self.desired_setpoints[register]
+                changed = True
+                continue
             if lo <= value <= hi:
                 continue
             changed = True
@@ -717,6 +799,11 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
 
     def _mark_block_success(self, block: str) -> None:
         self._block_last_success[block] = time.monotonic()
+        self._block_success_count[block] = self._block_success_count.get(block, 0) + 1
+
+    def block_success_count(self, block: str) -> int:
+        """Count successful reads for block freshness confirmation."""
+        return self._block_success_count.get(block, 0)
 
     def block_is_fresh(self, block: str | None) -> bool:
         """Whether `block`'s last successful read is still within its
@@ -851,6 +938,8 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         while True:
             try:
                 interval = get_heartbeat_interval((self.data or {}).get("time_validity"))
+                if self._heartbeat_retry_pending:
+                    interval = SETPOINT_REASSERT_MIN_INTERVAL
                 try:
                     await asyncio.wait_for(
                         self._heartbeat_wake_event.wait(), timeout=interval
@@ -899,9 +988,12 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             data = self.data or {}
             if data.get("status") not in SESSION_ACTIVE_STATUSES:
                 return False
-            if not self.block_is_fresh(BLOCK_CONFIG) or not self.block_is_fresh(BLOCK_STATUS):
-                return False
-            if data.get("active_faults") or data.get("active_alarms"):
+            # 2.4.3: no block-freshness or alarm gate here any more. Going
+            # silent is not a safe failure - the charger reverts to maximum
+            # when the heartbeat stops. A stale block or a non-fatal alarm
+            # keeps the cap in place; a hard fault is handled by
+            # _heartbeat_tick sending a stop instead.
+            if data.get("active_faults"):
                 return False
             try:
                 success = await self.hass.async_add_executor_job(
@@ -926,9 +1018,10 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         the duration - serialized against any in-flight stop/heartbeat
         write, same as _async_send_setpoint above.
 
-        Also sets _charging_desired=True and clears _stop_inhibit on
-        success, INSIDE this same locked section, rather than leaving that
-        to switch.py after this returns. Closes a real race: switch.py's
+        Sets _charging_desired=True on success, INSIDE this same locked
+        section, rather than leaving that to switch.py after this returns.
+        _stop_inhibit/_stop_pending clear only after a fresh active status
+        confirms the start. Closes a real race: switch.py's
         async_turn_off clears _charging_desired and bumps the generation
         as its own first two (synchronous, lock-free) statements, so a
         concurrent turn_off's Task can run those the moment this method's
@@ -942,19 +1035,92 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         will send the authoritative final command shortly - don't re-arm
         desired state a stop is about to contradict.
         """
+        generation_before = self._charging_generation
         async with self._command_lock:
             if self._shutting_down:
                 return False
-            generation_before = self._charging_generation
-            success = await self.hass.async_add_executor_job(
-                self.client.write_holding_register, REG_CHARGING_CONTROL, 1
-            )
+            if self._charging_generation != generation_before:
+                return False
+            # Program staged current/power limits before the explicit Start
+            # command. This is the strongest ordering the protocol permits;
+            # on this firmware a setpoint write can itself resume charging,
+            # so the protocol provides no provable zero-draw interval before
+            # the cap takes effect. A failed cap write aborts explicit Start.
+            for register, value in list(self.desired_setpoints.items()):
+                try:
+                    cap_ok = await self.hass.async_add_executor_job(
+                        self.client.write_holding_register, register, value
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Pre-start setpoint write raised for 0x%04X; Start aborted",
+                        register,
+                    )
+                    await self._async_stop_after_uncertain_start()
+                    return False
+                if not cap_ok:
+                    _LOGGER.error(
+                        "Pre-start setpoint write failed for 0x%04X; Start aborted",
+                        register,
+                    )
+                    await self._async_stop_after_uncertain_start()
+                    return False
+                self.setpoint_reasserts += 1
+                if self._charging_generation != generation_before:
+                    return False
+            try:
+                success = await self.hass.async_add_executor_job(
+                    self.client.write_holding_register, REG_CHARGING_CONTROL, 1
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Start command raised; charger state is uncertain, issuing Stop"
+                )
+                await self._async_stop_after_uncertain_start()
+                return False
+            if not success:
+                _LOGGER.error(
+                    "Start command failed; charger state is uncertain, issuing Stop"
+                )
+                await self._async_stop_after_uncertain_start()
+                return False
             if success and self._charging_generation == generation_before:
                 self._charging_desired = True
-                if self._stop_inhibit:
-                    self._stop_inhibit = False
-                    self._session_state_dirty = True
-            return success
+                return True
+            return False
+
+    async def _async_stop_after_uncertain_start(self) -> None:
+        """A failed/uncertain pre-start cap or Start write may have taken
+        effect before its response was lost. Issue Stop under the already-
+        held command lock and retain the retry latch until confirmed."""
+        self._charging_desired = False
+        self._charging_generation += 1
+        self._stop_inhibit = True
+        self._stop_pending = True
+        self._heartbeat_retry_pending = True
+        self._session_state_dirty = True
+        try:
+            success = await self.hass.async_add_executor_job(
+                self.client.write_holding_register, REG_CHARGING_CONTROL, 2
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Stop after uncertain pre-start setpoint failure raised; retry remains pending"
+            )
+            success = False
+        if not success:
+            self.stop_write_failures += 1
+            _LOGGER.error(
+                "Stop after uncertain pre-start setpoint failure was not confirmed; "
+                "charging may remain active and its cap may expire"
+            )
+        self._wake_heartbeat()
+        try:
+            await self.async_flush_session_state()
+        except Exception:
+            _LOGGER.exception(
+                "Could not persist pending Stop after uncertain pre-start setpoint"
+            )
 
     async def async_send_stop(self) -> bool:
         """Sends the stop-charging command, holding self._command_lock for
@@ -962,9 +1128,13 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         desired - stop's entire purpose is to change that state, and it must
         always be allowed through as long as the lock itself is available."""
         async with self._command_lock:
-            return await self.hass.async_add_executor_job(
-                self.client.write_holding_register, REG_CHARGING_CONTROL, 2
-            )
+            try:
+                return await self.hass.async_add_executor_job(
+                    self.client.write_holding_register, REG_CHARGING_CONTROL, 2
+                )
+            except Exception:
+                _LOGGER.exception("FoxESS Stop command raised; stop remains pending")
+                return False
 
     async def async_set_desired_setpoint(self, register: int, value: int) -> bool | None:
         """Single entry point for a user-initiated setpoint change
@@ -1060,6 +1230,21 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         check and the write starting; now the check and the write are atomic
         with respect to the lock.
         """
+        self._heartbeat_retry_pending = False
+        if self._start_confirmation_pending:
+            return
+        if self._stop_pending:
+            # While Stop is unconfirmed, retry it at the short heartbeat
+            # cadence. A cap write could implicitly resume charging.
+            self.stop_retry_count += 1
+            success = await self.async_send_stop()
+            if not success:
+                self.stop_write_failures += 1
+                _LOGGER.error(
+                    "FoxESS Stop retry failed; charging may remain active and its cap may expire"
+                )
+            self._heartbeat_retry_pending = True
+            return
         if not self._charging_desired:
             return
         if not self.desired_setpoints:
@@ -1067,35 +1252,39 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         data = self.data or {}
         if data.get("status") not in SESSION_ACTIVE_STATUSES:
             return
-        # BLOCK_CONFIG freshness alone used to be the only gate here, but
-        # whether charging is currently active/desired is a *status* block
-        # decision (the `data.get("status")` check just above) - a stale
-        # status block reporting an old "still charging" reading must not
-        # be trusted to justify a write just because the unrelated config
-        # block happens to still be fresh.
-        if not self.block_is_fresh(BLOCK_CONFIG):
-            return
-        if not self.block_is_fresh(BLOCK_STATUS):
-            return
-        # Re-asserting a charge-limit setpoint while the charger has an
-        # active fault or alarm is not something this feature should do
-        # blindly - reuses the same decoded active_faults/active_alarms
-        # lists _fetch() already computes every poll via decode_bitmask(),
-        # rather than re-decoding fault_code/alarm_code here.
-        if data.get("active_faults") or data.get("active_alarms"):
+        # 2.4.3: block freshness and active alarms no longer silence the
+        # heartbeat. Every earlier gate here failed *unsafe*: the charger
+        # reverts 0x3001/0x3002 to maximum once writes stop, so "stale
+        # config block" or "phase_loss alarm" used to mean "uncapped". Keep
+        # capping on the last known status instead. A hard fault is the one
+        # case where re-asserting a limit is the wrong response - stop the
+        # session outright rather than either go silent or keep it going.
+        if data.get("active_faults"):
+            _LOGGER.warning(
+                "Charger reports active fault(s) %s during a session - "
+                "sending stop instead of re-asserting the charge limit",
+                data["active_faults"],
+            )
+            self._charging_desired = False
+            self._charging_generation += 1
+            self._stop_pending = True
+            self._stop_inhibit = True
+            self._session_state_dirty = True
+            if not await self.async_send_stop():
+                self.stop_write_failures += 1
+            self._heartbeat_retry_pending = True
             return
 
         generation = self._charging_generation
-        # list(...) snapshot rather than iterating the live dict directly:
-        # number.py's async_set_native_value can mutate desired_setpoints
-        # (a concurrent register write from an entity, e.g. the user
-        # changing Max Charging Current mid-tick) from another coroutine
-        # while this loop is suspended at the `await` below - iterating the
-        # dict itself while it can be mutated elsewhere risks
-        # "RuntimeError: dictionary changed size during iteration", or
-        # silently skipping/duplicating entries.
+        # list(...) snapshot: number.py's async_set_native_value can mutate
+        # desired_setpoints while this loop is suspended at the await below.
         for register, desired in list(self.desired_setpoints.items()):
-            await self._async_send_setpoint(register, desired, generation)
+            ok = await self._async_send_setpoint(register, desired, generation)
+            if not ok and self._charging_desired and self._charging_generation == generation:
+                # Failed write during a still-desired session: retry at
+                # SETPOINT_REASSERT_MIN_INTERVAL, not a full interval.
+                self.heartbeat_write_failures += 1
+                self._heartbeat_retry_pending = True
 
     def _fetch(self) -> dict:
         # Start from the last known-good values instead of a blank dict, so a
@@ -1173,6 +1362,11 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
             # as a legitimate Plug & Charge start, or the heartbeat would
             # sustain an unwanted implicit-resume (the 2026-09-18 incident
             # this exists to prevent).
+            if self._stop_pending and data["status"] not in SESSION_ACTIVE_STATUSES:
+                self._stop_pending = False
+                self._heartbeat_retry_pending = False
+                self._session_state_dirty = True
+
             if (
                 data["status"] in SESSION_ACTIVE_STATUSES
                 and not self._charging_desired
@@ -1383,6 +1577,11 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         data["diag_write_echo_mismatches"] = self.client.write_echo_mismatches
         data["diag_energy_rejections"]    = len(self.energy_rejections)
         data["diag_setpoint_reasserts"]   = self.setpoint_reasserts
+        data["diag_setpoint_drift_events"] = self.setpoint_drift_events
+        data["diag_heartbeat_write_failures"] = self.heartbeat_write_failures
+        data["diag_stop_pending"] = self._stop_pending
+        data["diag_stop_write_failures"] = self.stop_write_failures
+        data["diag_stop_retries"] = self.stop_retry_count
         data["energy_rejection_log"]      = self.energy_rejections[-5:]
 
     # ── Energy plausibility guard ─────────────────────────────────────────────
@@ -1410,7 +1609,10 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         # falling back to the model's rated max only when that reading is
         # itself missing.
         rated_max_kw = get_capabilities(data.get("id_model_code"))["max_power_kw"]
-        max_power_kw = max((data.get("max_power_raw") or rated_max_kw * 10) * 0.1, rated_max_kw)
+        # 2.4.3: capped at 1.5x rated - a garbage max_power_raw (e.g. 0xFFFF
+        # = 6553.5kW) used to widen the guard until it accepted anything.
+        live_max_kw = (data.get("max_power_raw") or rated_max_kw * 10) * 0.1
+        max_power_kw = max(min(live_max_kw, rated_max_kw * 1.5), rated_max_kw)
 
         # 2026-09 (second audit): the coordinator's own session-tracking
         # state already knows when a real session boundary occurs - this is

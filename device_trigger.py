@@ -7,8 +7,8 @@ file is the canonical reference this was modeled on). Each is just a state
 transition of an entity this integration already exposes:
 
     vehicle_plugged_in  -> binary_sensor "vehicle_connected"    to "on"
-    charging_started    -> binary_sensor "is_charging"          to "on"
-    charging_stopped    -> binary_sensor "is_charging"          to "off"
+    charging_started    -> switch "charging" session-active state to "on"
+    charging_stopped    -> switch "charging" session-active state to "off"
     fault                -> binary_sensor "has_fault"            to "on"
     alarm                -> binary_sensor "has_alarm"            to "on"
 
@@ -62,8 +62,11 @@ TRIGGER_TYPES = {
 # deliberately has no entry in either of these two tables.
 _TRIGGER_ENTITY_KEY: dict[str, str] = {
     "vehicle_plugged_in": "vehicle_connected",
-    "charging_started":   "is_charging",
-    "charging_stopped":   "is_charging",
+    # The Charging switch represents an active charging session (statuses
+    # 2/3/4), including a vehicle pause at status 4. The power-flow binary
+    # sensor intentionally remains status 3 only.
+    "charging_started":   "charging",
+    "charging_stopped":   "charging",
     "fault":              "has_fault",
     "alarm":              "has_alarm",
 }

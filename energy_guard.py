@@ -161,7 +161,15 @@ def decide_energy_reading(
     ) / ENERGY_QUANTUM_KWH  # convert back to raw (ENERGY_QUANTUM_KWH-sized) units
 
     if delta < 0:
-        implausible = not (allow_decrease and (session_boundary or raw <= NEAR_ZERO_RAW_UNITS))
+        # A confirmed new session permits a non-zero counter reset, but the
+        # value must still fit the energy the charger could have delivered
+        # since the previous observation. This preserves legitimate reads
+        # that occur after charging has begun while rejecting stale/corrupt
+        # values copied from a previous session.
+        boundary_max_raw = max_plausible_delta
+        plausible_reset = session_boundary and raw <= boundary_max_raw
+        near_zero_reset = raw <= NEAR_ZERO_RAW_UNITS
+        implausible = not (allow_decrease and (plausible_reset or near_zero_reset))
     else:
         implausible = delta > max_plausible_delta
 

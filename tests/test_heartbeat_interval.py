@@ -17,8 +17,8 @@ from custom_components.foxess_charger.const import (
 
 
 def test_halves_the_live_time_validity():
-    assert get_heartbeat_interval(180) == 90
     assert get_heartbeat_interval(60) == 30
+    assert get_heartbeat_interval(40) == 20
 
 
 def test_floors_at_the_minimum_for_a_low_time_validity():
@@ -44,8 +44,7 @@ def test_missing_time_validity_uses_the_documented_default():
 
 
 def test_real_deployed_value_matches_expectation():
-    """Andrew's charger is currently configured at time_validity=180s
-    (confirmed live 2026-09-18) - pins that the interval this actually
-    produces on the real device is 90s, comfortably above the old fixed
-    30s and with the same safety margin regardless of future reconfig."""
-    assert get_heartbeat_interval(180) == 90
+    """Andrew's charger reports time_validity=180s, but the firmware reverts
+    after ~60s (2026-09-24 sawtooth) - the old expectation of 90s here was
+    the bug. The value must be capped to the 60s firmware window -> 30s."""
+    assert get_heartbeat_interval(180) == 30

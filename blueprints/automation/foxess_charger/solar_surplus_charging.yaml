@@ -12,11 +12,10 @@
 #     the fail-safe branch below on the next minute tick if it went
 #     unavailable, rather than only reacting to state changes that may
 #     never come).
-#   - Sign convention: the grid power sensor is assumed positive =
-#     importing from the grid, negative = exporting surplus - the
-#     convention most inverter/meter integrations use for a single "grid
-#     power" sensor. Flip "Invert grid power sign" if yours is the other
-#     way around.
+#   - Grid power is converted to Watts using the sensor's unit_of_measurement
+#     (W or kW). Unsupported/missing units fail safe. Sign convention is then
+#     positive = importing and negative = exporting surplus; flip "Invert
+#     grid power sign" if yours is the other way around.
 #   - Hysteresis: only acts once import is more than `hysteresis_watts`
 #     above or below the ceiling, so it doesn't hunt/oscillate on every
 #     small fluctuation around the ceiling itself.
@@ -36,17 +35,15 @@
 #     (Charging switch off) rather than writing an out-of-range value -
 #     the charger can't throttle any lower than that per the integration's
 #     own README.
-#   - Fail-safe: if the grid power sensor is unavailable/unknown, charging
-#     is stopped rather than left running at its last-known setpoint with
-#     no visibility into whether that's still appropriate. This bypasses
-#     the minimum-adjustment-delay dwell timer entirely (see the `action`
-#     structure below) - a safety stop must never wait out a throttle meant
-#     only to rate-limit ordinary setpoint tuning.
-#   - When raising current from a stopped session, the new (lower, ramp-up)
-#     current limit is written *before* the charging switch is turned on -
-#     never the other way around - so the session can't briefly start at
-#     whatever setpoint happened to be left over from before it was last
-#     stopped.
+#   - Fail-safe: if the grid sensor has no numeric value or reports an
+#     unsupported unit, charging is stopped rather than left running at its
+#     last-known setpoint with no trustworthy grid reading. This bypasses
+#     the minimum-adjustment-delay dwell timer entirely.
+#   - When raising current from a stopped session, the automation calls
+#     number.set_value before switch.turn_on. This only guarantees Home
+#     Assistant service-call order: an integration may defer the physical
+#     write while stopped, so this blueprint cannot guarantee the hardware
+#     has accepted the new limit before charging starts.
 #   - switch.turn_on is only called when the switch is actually off - not
 #     unconditionally on every "raise" adjustment - so a normal setpoint
 #     tuning cycle while already charging doesn't re-issue a redundant start
@@ -70,9 +67,11 @@ blueprint:
   description: >
     Keeps grid import near a target ceiling by raising/lowering the FoxESS
     EV Charger's Max Charging Current, with hysteresis and a minimum time
-    between actual current changes. A once-per-minute safety check does not
-    reset that dwell timer. Charging stops if the grid sensor goes unavailable.
-    Grid-limit/surplus control only - no tariff or cost logic.
+    between actual current changes. Grid power sensors must report W or kW;
+    kW readings are converted to W. A once-per-minute safety check does not
+    reset that dwell timer. Charging stops if the grid sensor has no numeric
+    value or reports an unsupported unit. Grid-limit/surplus control only -
+    no tariff or cost logic.
   domain: automation
   source_url: https://github.com/andrewmatten/foxess-ev-charger/blob/main/blueprints/automation/foxess_charger/solar_surplus_charging.yaml
   homeassistant:
@@ -86,9 +85,11 @@ blueprint:
     grid_power_sensor:
       name: Grid Power Sensor
       description: >
-        Instantaneous grid power in Watts. Positive = importing from the
-        grid, negative = exporting surplus (see "Invert grid power sign"
-        below if yours is the opposite convention).
+        Instantaneous grid power with unit_of_measurement W or kW. Readings
+        in kW are converted to Watts. Positive = importing from the grid,
+        negative = exporting surplus (see "Invert grid power sign" below if
+        yours is the opposite convention). Sensors with other or missing
+        units or nonnumeric readings are treated as unsafe and stop charging.
       selector:
         entity:
           domain: sensor
@@ -164,6 +165,7 @@ max_exceeded: silent
 
 variables:
   grid_power_sensor: !input grid_power_sensor
+  grid_power_unit: "{{ state_attr(grid_power_sensor, 'unit_of_measurement') }}"
   invert_grid_power_sign: !input invert_grid_power_sign
   max_current_number: !input max_current_number
   charging_switch: !input charging_switch
@@ -186,20 +188,25 @@ trigger:
 
 action:
   - choose:
-      # Fail-safe: sensor unavailable/unknown - stop charging rather than
-      # keep running at a setpoint chosen with no current visibility into
-      # available surplus. Deliberately the *first* thing this automation
-      # checks, before the minimum-adjustment-delay dwell gate below - a
-      # safety stop must never wait out a throttle that exists only to
-      # rate-limit ordinary setpoint tuning.
+      # Fail-safe: missing/nonnumeric value or unsupported unit - stop
+      # charging rather than interpret an unknown value as 0 W/export.
+      # Deliberately checked before the dwell gate.
       - conditions:
-          - condition: state
-            entity_id: !input grid_power_sensor
-            state: ["unavailable", "unknown"]
+          - condition: template
+            value_template: >
+              {{ not is_number(states(grid_power_sensor)) or
+                 grid_power_unit not in ['W', 'kW'] }}
         sequence:
-          - action: switch.turn_off
-            target:
-              entity_id: !input charging_switch
+          - if:
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: !input charging_switch
+                    state: "off"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: !input charging_switch
     default:
       # Minimum dwell time between adjustments - only gates the normal
       # raise/lower path below, never the fail-safe stop above. Use the
@@ -214,7 +221,9 @@ action:
           {{ states[max_current_number].last_changed is none or
              (now() - states[max_current_number].last_changed).total_seconds() >= min_adjustment_seconds }}
       - variables:
-          raw_grid_power: "{{ states(grid_power_sensor) | float(0) }}"
+          raw_grid_power: >
+            {{ (states(grid_power_sensor) | float(0)) *
+               (1000 if grid_power_unit == 'kW' else 1) }}
           import_power: "{{ (raw_grid_power * -1) if invert_grid_power_sign else raw_grid_power }}"
           current_amps: "{{ states(max_current_number) | float(6) }}"
           entity_min: "{{ state_attr(max_current_number, 'min') | float(6) }}"
@@ -232,9 +241,16 @@ action:
                   - conditions:
                       - "{{ new_amps < entity_min }}"
                     sequence:
-                      - action: switch.turn_off
-                        target:
-                          entity_id: !input charging_switch
+                      - if:
+                          - condition: not
+                            conditions:
+                              - condition: state
+                                entity_id: !input charging_switch
+                                state: "off"
+                        then:
+                          - action: switch.turn_off
+                            target:
+                              entity_id: !input charging_switch
                 default:
                   - action: number.set_value
                     target:
@@ -242,21 +258,21 @@ action:
                     data:
                       value: "{{ new_amps }}"
           # Surplus available - raise current, clamped to the entity's own
-          # maximum. The new (lower, ramp-up) limit is written *before* the
-          # switch is turned on - never after - so a currently-stopped
-          # session can never briefly start at whatever setpoint was left
-          # over from before it was last stopped. switch.turn_on itself is
-          # only issued when the switch is actually off, so an ordinary
-          # tuning adjustment while already charging doesn't re-send a
-          # redundant start command every single time.
+          # maximum. number.set_value is called before switch.turn_on when
+          # stopped, but an integration may defer the physical register
+          # write; this automation cannot guarantee the charger accepted
+          # the cap before starting. switch.turn_on is only issued when off.
           - conditions:
               - "{{ import_power < (import_ceiling_watts - hysteresis_watts) }}"
             sequence:
-              - action: number.set_value
-                target:
-                  entity_id: !input max_current_number
-                data:
-                  value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
+              - if:
+                  - "{{ current_amps < entity_max }}"
+                then:
+                  - action: number.set_value
+                    target:
+                      entity_id: !input max_current_number
+                    data:
+                      value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
               - if:
                   - "{{ switch_is_off }}"
                 then:

@@ -323,21 +323,35 @@ DEFAULT_TIME_VALIDITY = 60  # seconds
 # *live* value (like evcc does) keeps the same safety margin regardless of
 # how time_validity is configured, rather than assuming a fixed number the
 # charger might not actually be using.
+# The firmware honours Command Time Validity only up to its documented 60s
+# maximum: with 0x3005 reading 180s, the real charger still reverted
+# 0x3001/0x3002 to maximum ~60s after each write (2026-09-24 ~91s power
+# sawtooth). Never trust the register beyond this.
+FIRMWARE_MAX_TIME_VALIDITY = 60  # seconds
+
+
 def get_heartbeat_interval(time_validity: int | float | None) -> float:
-    """Half the charger's own configured Command Time Validity, floored at
-    SETPOINT_REASSERT_MIN_INTERVAL so a very low or missing time_validity
-    can't turn re-assertion into a per-poll write loop."""
-    value = time_validity if time_validity else DEFAULT_TIME_VALIDITY
+    """Half the charger's effective Command Time Validity (the register value
+    capped at FIRMWARE_MAX_TIME_VALIDITY), floored at
+    SETPOINT_REASSERT_MIN_INTERVAL so a very low value can't turn
+    re-assertion into a per-poll write loop. Missing, non-numeric or
+    non-positive values fall back to DEFAULT_TIME_VALIDITY."""
+    if (
+        isinstance(time_validity, bool)
+        or not isinstance(time_validity, (int, float))
+        or not time_validity > 0  # also rejects NaN
+    ):
+        time_validity = DEFAULT_TIME_VALIDITY
+    value = min(time_validity, FIRMWARE_MAX_TIME_VALIDITY)
     return max(SETPOINT_REASSERT_MIN_INTERVAL, value / 2)
 
 
 # Maps each re-asserted setpoint register to the coordinator.data key it
-# populates on a successful write. Shared by __init__.py's
-# _reassert_setpoints() (poll-driven, only writes once the live register has
-# drifted from desired) and the background heartbeat task added alongside it
-# (time-driven off get_heartbeat_interval() above, writes unconditionally
-# whenever a tick's gates all pass) - one table so the two correction paths
-# can't disagree on which key means what.
+# populates on a successful write. Used by __init__.py's
+# _async_send_setpoint (the single write primitive shared by the background
+# heartbeat task, time-driven off get_heartbeat_interval() above, and by
+# async_send_start/async_send_stop) - one table so nothing can disagree on
+# which key means what.
 REASSERTED_DATA_KEYS = {
     REG_MAX_CHARGING_CURRENT: "max_charging_current_raw",
     REG_MAX_CHARGING_POWER:   "max_charging_power_raw",

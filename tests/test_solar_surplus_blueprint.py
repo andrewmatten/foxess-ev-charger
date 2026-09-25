@@ -92,8 +92,12 @@ class Harness:
     def set_switch(self, state: str):
         self.hass.states.async_set(SWITCH, state)
 
-    def set_grid(self, watts):
-        self.hass.states.async_set(GRID, str(watts), {"device_class": "power"})
+    def set_grid(self, value, *, unit="W"):
+        self.hass.states.async_set(
+            GRID,
+            str(value),
+            {"device_class": "power", "unit_of_measurement": unit},
+        )
 
 
 async def _setup(hass, inputs=None):
@@ -333,13 +337,15 @@ async def test_hysteresis_band_does_nothing(hass, install_blueprint):
     assert h.turn_offs == 0
 
 
-async def test_raise_writes_the_setpoint_before_starting_the_session(
+async def test_raise_calls_setpoint_service_before_starting_the_session(
     hass, install_blueprint
 ):
-    """Ordering guarantee from the blueprint's own header: the ramp-up
-    current limit is written *before* switch.turn_on, so a stopped session
-    can never briefly start at whatever setpoint was left over from last
-    time."""
+    """Home Assistant calls number.set_value before switch.turn_on.
+
+    This asserts service-call order only. An integration can defer the
+    physical register write while stopped, so this is not a hardware-level
+    guarantee that the new limit is active before charging starts.
+    """
     order: list[str] = []
     h = Harness(hass)
 
@@ -395,3 +401,61 @@ async def test_inverted_sign_input_flips_the_direction(hass, install_blueprint):
         await hass.async_block_till_done()
 
     assert h.number_writes == [21.0], "inverted sign lowered instead of raising"
+
+
+async def test_kilowatt_sensor_is_converted_to_watts(hass, install_blueprint):
+    """A 5 kW import must use the same threshold math as 5000 W."""
+    h = Harness(hass)
+    await h.async_register()
+
+    with freeze_time(T0) as frozen:
+        h.set_number(20)
+        h.set_switch("on")
+        h.set_grid(100, unit="kW")
+        await hass.async_block_till_done()
+        await _setup(hass)
+
+        frozen.move_to(T0 + timedelta(minutes=3))
+        h.set_grid(5, unit="kW")
+        await hass.async_block_till_done()
+
+    assert h.number_writes == [19.0]
+    assert h.turn_offs == 0
+
+
+async def test_unsupported_grid_power_unit_fails_safe(hass, install_blueprint):
+    """A power sensor with an unsupported unit is not treated as surplus."""
+    h = Harness(hass)
+    await h.async_register()
+
+    with freeze_time(T0) as frozen:
+        h.set_number(20)
+        h.set_switch("on")
+        h.set_grid(5, unit="MW")
+        await hass.async_block_till_done()
+        await _setup(hass)
+        frozen.move_to(T0 + timedelta(seconds=1))
+        h.set_grid(5.1, unit="MW")
+        await hass.async_block_till_done()
+
+    assert h.turn_offs == 1
+    assert h.number_writes == []
+
+
+async def test_nonnumeric_reading_with_valid_unit_fails_safe(hass, install_blueprint):
+    """A nonnumeric W reading must not be interpreted as zero/export."""
+    h = Harness(hass)
+    await h.async_register()
+
+    with freeze_time(T0) as frozen:
+        h.set_number(20)
+        h.set_switch("on")
+        h.set_grid("invalid", unit="W")
+        await hass.async_block_till_done()
+        await _setup(hass)
+        frozen.move_to(T0 + timedelta(seconds=1))
+        h.set_grid("not-a-number", unit="W")
+        await hass.async_block_till_done()
+
+    assert h.turn_offs == 1
+    assert h.number_writes == []

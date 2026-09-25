@@ -246,11 +246,16 @@ class FoxESSNumber(FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity
             # whether an attempted physical write itself succeeded.
             result = await self.coordinator.async_set_desired_setpoint(desc.register, raw)
             if result is False:
+                await self.coordinator.async_flush_desired_setpoints()
                 raise HomeAssistantError(
                     f"FoxESS: failed to write {desc.key}={value} (write to "
                     f"0x{desc.register:04X} failed)"
                 )
             self.async_write_ha_state()
+            # The coordinator poll normally persists this state later, but
+            # an immediate integration reload can beat that poll. Flush the
+            # staged intent before returning from the user's service call.
+            await self.coordinator.async_flush_desired_setpoints()
             if result is None:
                 return  # skipped, nothing landed on the charger - nothing to read back
             await self._async_verify_read_back(desc, raw)

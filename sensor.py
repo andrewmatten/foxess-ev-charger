@@ -425,6 +425,11 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
             "write_echo_mismatches": d.get("diag_write_echo_mismatches", 0),
             "energy_rejections":   d.get("diag_energy_rejections", 0),
             "setpoint_reasserts":  d.get("diag_setpoint_reasserts", 0),
+            "setpoint_drift_events": d.get("diag_setpoint_drift_events", 0),
+            "heartbeat_write_failures": d.get("diag_heartbeat_write_failures", 0),
+            "stop_pending": d.get("diag_stop_pending", False),
+            "stop_write_failures": d.get("diag_stop_write_failures", 0),
+            "stop_retries": d.get("diag_stop_retries", 0),
             # Full context on each rejected energy read, so a recorder
             # correction can be computed rather than guessed at later.
             "recent_energy_rejections": d.get("energy_rejection_log", []),

@@ -15,8 +15,8 @@ import pytest
 
 from custom_components.foxess_charger import FoxESSChargerCoordinator
 from custom_components.foxess_charger.const import (
-    REG_CHARGING_CONTROL, REG_MAX_CHARGING_CURRENT, REG_TIME_VALIDITY,
-    BLOCK_CONFIG, BLOCK_STATUS,
+    REG_CHARGING_CONTROL, REG_MAX_CHARGING_CURRENT, REG_MAX_CHARGING_POWER,
+    REG_TIME_VALIDITY, BLOCK_CONFIG, BLOCK_STATUS,
 )
 from custom_components.foxess_charger.number import NUMBERS, FoxESSNumber
 
@@ -136,44 +136,6 @@ class TestPollDrivenWriterIsGone:
         assert not hasattr(FoxESSChargerCoordinator, "_reassert_setpoints")
 
 
-class TestFailedStopRestoresProtectionOnlyIfStillActive:
-    async def test_failed_stop_with_fresh_status_confirming_still_active_restores_desired(self, hass, monkeypatch):
-        client = MagicMock()
-        client.write_holding_register.return_value = False  # stop write fails
-        coordinator = make_charging_coordinator(hass, client)
-
-        async def fake_refresh():
-            coordinator.data = {**coordinator.data, "status": 3}  # still charging
-        monkeypatch.setattr(coordinator, "async_request_refresh", fake_refresh)
-
-        coordinator._charging_desired = False
-        coordinator._charging_generation += 1
-        success = await coordinator.async_send_stop()
-        assert success is False
-
-        await coordinator.async_request_refresh()
-        if (coordinator.data or {}).get("status") in (3,):
-            coordinator._charging_desired = True
-        assert coordinator._charging_desired is True
-
-    async def test_failed_stop_with_fresh_status_confirming_inactive_does_not_restore(self, hass, monkeypatch):
-        client = MagicMock()
-        client.write_holding_register.return_value = False
-        coordinator = make_charging_coordinator(hass, client)
-
-        async def fake_refresh():
-            coordinator.data = {**coordinator.data, "status": 5}  # actually stopped/finished
-        monkeypatch.setattr(coordinator, "async_request_refresh", fake_refresh)
-
-        coordinator._charging_desired = False
-        await coordinator.async_send_stop()
-        await coordinator.async_request_refresh()
-        from custom_components.foxess_charger.const import SESSION_ACTIVE_STATUSES
-        if (coordinator.data or {}).get("status") in SESSION_ACTIVE_STATUSES:
-            coordinator._charging_desired = True
-        assert coordinator._charging_desired is False
-
-
 class TestUnloadWaitsForInFlightTransaction:
     async def test_stop_heartbeat_blocks_until_a_held_lock_is_released(self, hass):
         client = BlockableFakeClient()
@@ -198,7 +160,7 @@ class TestUnloadWaitsForInFlightTransaction:
 
 class TestUserSetpointWriteThenStop:
     """number.py's user-initiated setpoint writes (max_charging_current/
-    max_charging_power) now route through async_send_setpoint_user, sharing
+    max_charging_power) route through async_set_desired_setpoint, sharing
     _command_lock with start/stop/heartbeat - the same race class closed for
     those three entry points, closed here for the fourth."""
 
@@ -208,7 +170,7 @@ class TestUserSetpointWriteThenStop:
         coordinator = make_charging_coordinator(hass, client)
 
         setpoint_task = asyncio.ensure_future(
-            coordinator.async_send_setpoint_user(REG_MAX_CHARGING_CURRENT, 160)
+            coordinator.async_set_desired_setpoint(REG_MAX_CHARGING_CURRENT, 160)
         )
         await hass.async_add_executor_job(client.entered.wait, 5)
         assert client.entered.is_set(), "setpoint write never started - test setup is wrong"
@@ -220,18 +182,27 @@ class TestUserSetpointWriteThenStop:
         setpoint_result = await setpoint_task
         stop_result = await stop_task
 
-        assert setpoint_result is True
+        assert setpoint_result is True, (
+            "the write was already in flight (desired was still True when "
+            "it passed its gate check) before the concurrent stop even "
+            "requested the lock - it must complete, not be aborted mid-flight"
+        )
         assert stop_result is True
         assert client.writes == [(REG_MAX_CHARGING_CURRENT, 160), (REG_CHARGING_CONTROL, 2)]
 
 
 class TestStopThenUserSetpointWrite:
-    """Deliberate scope decision (see task brief): unlike the heartbeat's
-    automatic re-push, a user's explicit setpoint change is NOT invalidated
-    by a stop landing first - it should still apply once the lock frees.
-    async_send_setpoint_user has no gating beyond _shutting_down."""
+    """2026-09-18 real incident fix: a setpoint write queued behind a stop
+    that already holds the lock must NOT apply once the lock frees - it
+    must see the post-stop _charging_desired=False and skip the physical
+    write entirely (still recording the value for next session). The old
+    behaviour (apply anyway, exempt from the desired-state gate) was
+    exactly the mechanism that let an automation's unconditional
+    number.set_value silently resume a session that had just been stopped
+    for home-battery protection - writing these registers is itself an
+    implicit "resume charging" on this firmware."""
 
-    async def test_setpoint_write_queues_behind_a_stop_that_holds_the_lock_first_and_still_applies(self, hass):
+    async def test_setpoint_write_is_saved_but_never_reaches_the_wire_after_a_stop_that_holds_the_lock_first(self, hass):
         client = BlockableFakeClient()
         client.hold_next.add(REG_CHARGING_CONTROL)
         coordinator = make_charging_coordinator(hass, client)
@@ -240,11 +211,12 @@ class TestStopThenUserSetpointWrite:
         await hass.async_add_executor_job(client.entered.wait, 5)
         assert client.entered.is_set(), "stop write never started - test setup is wrong"
 
-        # Stop already holds the lock. The user's setpoint write must queue
-        # behind it, not interleave - and, unlike the heartbeat's stale-
-        # generation abort, must still land once the lock frees.
+        # Stop already holds the lock, and (as switch.py's async_turn_off
+        # does as its own first, lock-free action) has already cleared
+        # _charging_desired before even trying to acquire it.
+        coordinator._charging_desired = False
         setpoint_task = asyncio.ensure_future(
-            coordinator.async_send_setpoint_user(REG_MAX_CHARGING_CURRENT, 160)
+            coordinator.async_set_desired_setpoint(REG_MAX_CHARGING_CURRENT, 160)
         )
         await asyncio.sleep(0.05)
         client.gate.set()  # release the blocked stop write
@@ -253,12 +225,73 @@ class TestStopThenUserSetpointWrite:
         setpoint_result = await setpoint_task
 
         assert stop_result is True
-        assert setpoint_result is True, (
-            "a user's explicit setpoint write must still apply after a stop "
-            "frees the lock - it is not subject to the heartbeat's "
-            "desired/generation/freshness/fault gating (see task brief)"
+        assert setpoint_result is None, (
+            "a setpoint write must be skipped (not an error, not applied) "
+            "once _charging_desired is False - this is the exact "
+            "2026-09-18 incident mechanism, now closed"
         )
-        assert client.writes == [(REG_CHARGING_CONTROL, 2), (REG_MAX_CHARGING_CURRENT, 160)]
+        assert client.writes == [(REG_CHARGING_CONTROL, 2)], (
+            "the setpoint must never reach the charger after a stop"
+        )
+        assert coordinator.desired_setpoints[REG_MAX_CHARGING_CURRENT] == 160, (
+            "the value must still be recorded, ready for the next session"
+        )
+
+
+class TestStartAndStopOverlap:
+    """2026-09-18 start-race fix: async_send_start now captures the
+    generation and decides whether to set _charging_desired=True INSIDE
+    the lock, immediately after its own write - not in switch.py, after
+    the lock was already released. Closes a real race: switch.py's
+    async_turn_off clears _charging_desired and bumps the generation as
+    its own synchronous, lock-free first actions, so it can run those the
+    moment a concurrent start's write yields to the executor - i.e.
+    potentially before that start's write even completes. Setting the
+    desired flag back in switch.py, after async_send_start returned, would
+    unconditionally stomp turn_off's False back to True with no way to
+    tell a stop had just been requested."""
+
+    async def test_a_stop_landing_during_an_in_flight_start_prevents_desired_from_being_set(self, hass):
+        client = BlockableFakeClient()
+        client.hold_next.add(REG_CHARGING_CONTROL)
+        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
+        coordinator.data = {"status": 5, "active_faults": [], "active_alarms": []}
+        coordinator._charging_desired = False
+
+        start_task = asyncio.ensure_future(coordinator.async_send_start())
+        await hass.async_add_executor_job(client.entered.wait, 5)
+        assert client.entered.is_set(), "start write never started - test setup is wrong"
+
+        # Simulate switch.py's async_turn_off landing concurrently while
+        # the start's write is still in flight.
+        coordinator._charging_desired = False
+        coordinator._charging_generation += 1
+        stop_task = asyncio.ensure_future(coordinator.async_send_stop())
+
+        client.gate.set()  # release the blocked start write
+        start_result = await start_task
+        stop_result = await stop_task
+
+        assert start_result is False, "a concurrent Stop must cancel the Start result"
+        assert stop_result is True
+        assert client.writes == [(REG_CHARGING_CONTROL, 1), (REG_CHARGING_CONTROL, 2)]
+        assert coordinator._charging_desired is False, (
+            "start must not stomp _charging_desired back to True once the "
+            "generation proves a stop landed during its in-flight write"
+        )
+
+    async def test_start_ack_sets_desired_but_waits_for_status_before_clearing_inhibit(self, hass):
+        client = BlockableFakeClient()
+        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
+        coordinator.data = {"status": 5, "active_faults": [], "active_alarms": []}
+        coordinator._charging_desired = False
+        coordinator._stop_inhibit = True
+
+        result = await coordinator.async_send_start()
+
+        assert result is True
+        assert coordinator._charging_desired is True
+        assert coordinator._stop_inhibit is True
 
 
 def make_entry() -> MagicMock:
@@ -277,7 +310,7 @@ class TestNumberEntityRoutesReassertedRegistersThroughTheLock:
         client = MagicMock()
         coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
         coordinator.data = {"max_charging_current_raw": 100}
-        coordinator.async_send_setpoint_user = AsyncMock(return_value=True)
+        coordinator.async_set_desired_setpoint = AsyncMock(return_value=True)
         coordinator.async_request_refresh = AsyncMock()
 
         desc = next(d for d in NUMBERS if d.key == "max_charging_current")
@@ -288,7 +321,7 @@ class TestNumberEntityRoutesReassertedRegistersThroughTheLock:
         with patch("custom_components.foxess_charger.number.asyncio.sleep", AsyncMock()):
             await entity.async_set_native_value(16.0)  # raw=160
 
-        coordinator.async_send_setpoint_user.assert_awaited_once_with(REG_MAX_CHARGING_CURRENT, 160)
+        coordinator.async_set_desired_setpoint.assert_awaited_once_with(REG_MAX_CHARGING_CURRENT, 160)
         client.write_holding_register.assert_not_called()
 
     async def test_non_reasserted_register_still_writes_directly_bypassing_the_coordinator(self, hass):
@@ -296,7 +329,7 @@ class TestNumberEntityRoutesReassertedRegistersThroughTheLock:
         client.write_holding_register.return_value = True
         coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
         coordinator.data = {"time_validity": 60}
-        coordinator.async_send_setpoint_user = AsyncMock(return_value=True)
+        coordinator.async_set_desired_setpoint = AsyncMock(return_value=True)
         coordinator.async_request_refresh = AsyncMock()
 
         desc = next(d for d in NUMBERS if d.key == "time_validity")
@@ -308,4 +341,53 @@ class TestNumberEntityRoutesReassertedRegistersThroughTheLock:
             await entity.async_set_native_value(30)
 
         client.write_holding_register.assert_called_once_with(REG_TIME_VALIDITY, 30)
-        coordinator.async_send_setpoint_user.assert_not_called()
+        coordinator.async_set_desired_setpoint.assert_not_called()
+
+
+class TestReassertedRegisterSkippedWhenNotCharging:
+    """2026-09-18 real incident, reproduced and closed: an automation's
+    unconditional number.set_value(max_charging_power, 7.3) landing while
+    charge_mode was "Paused - Battery Protect" (_charging_desired already
+    False) must save the value but never touch the wire - the exact
+    mechanism that silently resumed a stopped session for 52 minutes."""
+
+    async def test_setpoint_saved_but_not_written_while_stopped(self, hass):
+        client = MagicMock()
+        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
+        coordinator.data = {"max_charging_power_raw": 73}
+        coordinator._charging_desired = False  # the exact incident precondition
+
+        desc = next(d for d in NUMBERS if d.key == "max_charging_power")
+        entity = FoxESSNumber(coordinator, client, desc, make_entry())
+        entity.hass = hass
+        entity.async_write_ha_state = MagicMock()
+
+        await entity.async_set_native_value(7.3)  # raw=73
+
+        client.write_holding_register.assert_not_called()
+        assert coordinator.desired_setpoints[REG_MAX_CHARGING_POWER] == 73
+        assert entity.native_value == 7.3, (
+            "the entity must show the saved intent, not the stale live "
+            "register value, while the write is deferred"
+        )
+
+    async def test_the_incident_scenario_end_to_end_cannot_resume_charging(self, hass):
+        """The precise 20:26/21:00 sequence: paused for battery protection,
+        then an unconditional end-of-window write at full power - must not
+        touch the charger at all."""
+        client = MagicMock()
+        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
+        coordinator.data = {"status": 5, "max_charging_power_raw": 73}  # "finished", not charging
+        coordinator._charging_desired = False
+        coordinator._stop_inhibit = True
+
+        desc = next(d for d in NUMBERS if d.key == "max_charging_power")
+        entity = FoxESSNumber(coordinator, client, desc, make_entry())
+        entity.hass = hass
+        entity.async_write_ha_state = MagicMock()
+
+        await entity.async_set_native_value(7.3)
+
+        client.write_holding_register.assert_not_called()
+        assert coordinator._charging_desired is False
+        assert coordinator._stop_inhibit is True

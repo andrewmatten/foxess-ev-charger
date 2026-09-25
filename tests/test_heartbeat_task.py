@@ -38,6 +38,7 @@ from custom_components.foxess_charger.const import (
     BLOCK_CONFIG,
     BLOCK_STATUS,
     DOMAIN,
+    REG_CHARGING_CONTROL,
     REG_MAX_CHARGING_CURRENT,
     REG_MAX_CHARGING_POWER,
     get_heartbeat_interval,
@@ -234,14 +235,20 @@ class TestStopRace:
         assert coordinator._charging_desired is False
         client.write_holding_register.reset_mock()
 
-        # A tick landing right after must be a no-op now.
+        # Stop has not been confirmed by the mocked refresh, so a tick must
+        # retry Stop instead of being a no-op or pushing a setpoint.
         await coordinator._heartbeat_tick()
 
-        client.write_holding_register.assert_not_called()
+        client.write_holding_register.assert_called_once_with(REG_CHARGING_CONTROL, 2)
 
 
 class TestFreshnessGate:
-    async def test_stale_config_block_prevents_a_push(self, hass):
+    # 2.4.3 (audit 2026-09-25, finding 3): these used to assert the
+    # heartbeat goes *silent* on a stale block or an active alarm. That
+    # fails unsafe - the charger reverts 0x3001/0x3002 to maximum once the
+    # writes stop - so the heartbeat now keeps capping, and a hard fault
+    # sends a stop instead. See tests/test_realistic_charger.py.
+    async def test_stale_config_block_still_pushes(self, hass):
         client = MagicMock()
         client.write_holding_register.return_value = True
         coordinator = make_coordinator(hass, client, {"status": 3})
@@ -251,14 +258,9 @@ class TestFreshnessGate:
 
         await coordinator._heartbeat_tick()
 
-        client.write_holding_register.assert_not_called()
+        client.write_holding_register.assert_called_once_with(REG_MAX_CHARGING_CURRENT, 160)
 
-    async def test_stale_status_block_prevents_a_push_even_if_config_is_fresh(self, hass):
-        """P0 audit fix: the gate used to check BLOCK_CONFIG's freshness
-        only - whether charging is currently active/desired is a *status*
-        block decision, so a stale status block reporting an old "still
-        charging" reading must not be trusted to justify a write just
-        because the unrelated config block happens to still be fresh."""
+    async def test_stale_status_block_still_pushes_on_last_known_active_status(self, hass):
         client = MagicMock()
         client.write_holding_register.return_value = True
         coordinator = make_coordinator(hass, client, {"status": 3})
@@ -269,12 +271,9 @@ class TestFreshnessGate:
 
         await coordinator._heartbeat_tick()
 
-        client.write_holding_register.assert_not_called()
+        client.write_holding_register.assert_called_once_with(REG_MAX_CHARGING_CURRENT, 160)
 
-    async def test_active_fault_suppresses_a_push_even_with_both_blocks_fresh(self, hass):
-        """P0 audit fix: re-asserting a charge-limit setpoint while the
-        charger has flagged a fault is not something this feature should
-        do blindly."""
+    async def test_active_fault_sends_stop_instead_of_a_push(self, hass):
         client = MagicMock()
         client.write_holding_register.return_value = True
         coordinator = make_coordinator(hass, client, {
@@ -287,9 +286,10 @@ class TestFreshnessGate:
 
         await coordinator._heartbeat_tick()
 
-        client.write_holding_register.assert_not_called()
+        client.write_holding_register.assert_called_once_with(REG_CHARGING_CONTROL, 2)
+        assert coordinator._charging_desired is False
 
-    async def test_active_alarm_suppresses_a_push_even_with_both_blocks_fresh(self, hass):
+    async def test_active_alarm_still_pushes(self, hass):
         client = MagicMock()
         client.write_holding_register.return_value = True
         coordinator = make_coordinator(hass, client, {
@@ -302,7 +302,7 @@ class TestFreshnessGate:
 
         await coordinator._heartbeat_tick()
 
-        client.write_holding_register.assert_not_called()
+        client.write_holding_register.assert_called_once_with(REG_MAX_CHARGING_CURRENT, 160)
 
     async def test_no_fault_or_alarm_allows_a_push_with_both_blocks_fresh(self, hass):
         """Sanity check paired with the two tests above: it's specifically

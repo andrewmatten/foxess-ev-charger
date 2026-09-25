@@ -53,7 +53,8 @@ async def _write_or_raise(
 
 async def _refresh_and_verify(
     coordinator: FoxESSChargerCoordinator, check_ok, mismatch_msg: str,
-) -> None:
+    *, fresh_block: str | None = None, previous_success_count: int | None = None,
+) -> bool:
     """Requests a coordinator refresh and confirms the charger actually
     applied the write, instead of trusting the optimistic patch alone.
 
@@ -66,8 +67,14 @@ async def _refresh_and_verify(
     """
     await asyncio.sleep(1.5)
     await coordinator.async_request_refresh()
-    if not check_ok(coordinator.data or {}):
+    confirmed = check_ok(coordinator.data or {})
+    if fresh_block is not None and previous_success_count is not None:
+        confirmed = confirmed and (
+            coordinator.block_success_count(fresh_block) > previous_success_count
+        )
+    if not confirmed:
         _LOGGER.warning(mismatch_msg)
+    return confirmed
 
 
 class FoxESSChargingSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity):
@@ -95,12 +102,11 @@ class FoxESSChargingSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Swit
         return (self.coordinator.data or {}).get("status") in SESSION_ACTIVE_STATUSES
 
     async def async_turn_on(self, **kwargs) -> None:
-        # async_send_start sets _charging_desired=True (and clears
-        # _stop_inhibit) itself, INSIDE its own command-lock section, on a
-        # confirmed-successful write - not here, and not before the write
-        # even happens. See async_send_start's own docstring (__init__.py)
-        # for why that state transition had to move inside the lock: doing
-        # it here, after the lock was already released, raced against a
+        # async_send_start sets _charging_desired=True inside its locked
+        # section. Stop inhibition/pending clears only after status confirms
+        # an active session below, not from the command acknowledgement.
+        # Moving the desired-state change inside the lock avoids a race
+        # with Stop: doing it here, after the lock was released, could
         # concurrent stop's flag-clear (which runs before that stop even
         # tries to acquire the lock) and could silently stomp it back to
         # True.
@@ -111,10 +117,14 @@ class FoxESSChargingSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Swit
         # _async_send_setpoint's docstring in __init__.py for why a single
         # shared lock across all of start/stop/heartbeat is what actually
         # closes the race this integration used to have.
+        start_generation = self.coordinator._charging_generation
+        self.coordinator._start_confirmation_pending = True
         success = await self.coordinator.async_send_start()
         if not success:
+            self.coordinator._start_confirmation_pending = False
+            self.coordinator._wake_heartbeat()
             raise HomeAssistantError(
-                "FoxESS: failed to start charging (write to 0x3000 failed)"
+                "FoxESS: failed to start charging (write to 0x4001 failed)"
             )
         self.coordinator.data["status"] = 3
         self.async_write_ha_state()
@@ -123,12 +133,35 @@ class FoxESSChargingSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Swit
         # here, this method runs on the event loop (see
         # FoxESSChargerCoordinator._wake_heartbeat in __init__.py).
         self.coordinator._wake_heartbeat()
-        await _refresh_and_verify(
-            self.coordinator,
-            lambda data: data.get("status") in SESSION_ACTIVE_STATUSES,
-            "FoxESS: sent start-charging command but charger status did not "
-            "reflect an active session after refresh",
-        )
+        status_reads_before_refresh = self.coordinator.block_success_count(BLOCK_STATUS)
+        start_confirmed = False
+        try:
+            start_confirmed = await _refresh_and_verify(
+                self.coordinator,
+                lambda data: data.get("status") in SESSION_ACTIVE_STATUSES,
+                "FoxESS: sent start-charging command but charger status did not "
+                "reflect an active session after refresh",
+                fresh_block=BLOCK_STATUS,
+                previous_success_count=status_reads_before_refresh,
+            )
+        finally:
+            # Stop can run while the refresh sleeps. Its generation bump is
+            # authoritative: a successful Start read-back must not undo that
+            # newer request by clearing stop-pending or re-arming heartbeat.
+            self.coordinator._start_confirmation_pending = False
+            if (
+                start_confirmed
+                and self.coordinator._charging_generation == start_generation
+            ):
+                self.coordinator._stop_pending = False
+                self.coordinator._stop_inhibit = False
+                self.coordinator._charging_desired = True
+                self.coordinator._session_state_dirty = True
+                try:
+                    await self.coordinator.async_flush_session_state()
+                except Exception:
+                    _LOGGER.exception("Could not persist confirmed FoxESS Start")
+            self.coordinator._wake_heartbeat()
 
     async def async_turn_off(self, **kwargs) -> None:
         # Must be the very first two statements, before the stop write is even
@@ -148,34 +181,26 @@ class FoxESSChargingSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Swit
         # implicit-resume-on-setpoint-write behavior) is not treated as a
         # legitimate Plug & Charge start, so the heartbeat won't sustain it.
         self.coordinator._stop_inhibit = True
+        self.coordinator._stop_pending = True
         self.coordinator._session_state_dirty = True
+        self.coordinator._heartbeat_retry_pending = True
+        try:
+            await self.coordinator.async_flush_session_state()
+        except Exception:
+            _LOGGER.exception(
+                "Could not persist pending FoxESS Stop; retry remains active in memory"
+            )
         success = await self.coordinator.async_send_stop()
         if not success:
-            # The stop write itself failed. Found in review, 2026-09-18:
-            # this used to restore _charging_desired=True (and clear
-            # _stop_inhibit) whenever a fresh status read still showed an
-            # active session, on the theory that a genuinely-still-running
-            # session deserves heartbeat protection even though the stop
-            # attempt that would have ended it didn't land. But this
-            # integration cannot tell that case apart from the one that
-            # actually happened tonight: an *unwanted* resume, where "the
-            # charger is still active" is exactly the problem being
-            # stopped, not evidence protection should resume. Reinforcing
-            # it in that case is actively harmful - the whole point of this
-            # handler's first three statements above. So this branch now
-            # deliberately does nothing beyond raising: _charging_desired
-            # stays False and _stop_inhibit stays True, matching this
-            # project's fail-toward-the-protective-branch precedent (see
-            # the low_soc pause condition's own history) - a genuinely
-            # normal session that failed to stop loses heartbeat protection
-            # for one cycle until the stop is retried or the vehicle
-            # disconnects, which is a much smaller risk than silently
-            # re-arming an intentional stop.
+            self.coordinator.stop_write_failures += 1
+            # Leave the stop pending and retry it from the heartbeat. The
+            # cap is deliberately not refreshed while Stop is unresolved:
+            # this firmware can resume on a setpoint write.
+            self.coordinator._wake_heartbeat()
             raise HomeAssistantError(
-                "FoxESS: failed to stop charging (write to 0x3000 failed)"
+                "FoxESS: failed to stop charging (write to 0x4001 failed)"
             )
-        self.coordinator.data["status"] = 5
-        self.async_write_ha_state()
+        self.coordinator._wake_heartbeat()
         await _refresh_and_verify(
             self.coordinator,
             lambda data: data.get("status") not in SESSION_ACTIVE_STATUSES,

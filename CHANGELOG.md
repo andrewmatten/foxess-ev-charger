@@ -1,21 +1,184 @@
 # Changelog
 
+## 2.4.3
+
+Fixes from the 2026-09-25 audit of the charger's power-limit behaviour. New
+`tests/fake_charger.py` models the real firmware: limits revert to max ~60s
+after the last write regardless of 0x3005, writes can fail, blocks can go
+stale, alarms/faults can be raised.
+
+- **Heartbeat timing** - the charger reports Command Time Validity (0x3005)
+  as 180s, but this firmware reverts the lower charging limit after about
+  60s. The heartbeat now caps the effective validity at 60s and reasserts
+  the limit every 30s. Invalid or missing validity readings use the default.
+- **Drift detection** - each poll during an active, desired session compares
+  0x3001/0x3002 against the desired setpoint. A mismatch logs a warning,
+  increments `setpoint_drift_events` (Transport Errors sensor attribute) and
+  wakes the heartbeat to re-send immediately.
+- **Fast retry** - a failed heartbeat write during an active session retries
+  after `SETPOINT_REASSERT_MIN_INTERVAL` (3s) instead of a full interval
+  (one missed write at 30s used to land right on the ~60s revert). Counted
+  as `heartbeat_write_failures`.
+- **Heartbeat fails safe** - a stale config/status block or a non-fatal alarm
+  no longer silences the heartbeat (silence = charger reverts to max). An
+  active *fault* now sends Stop instead of going silent.
+- **Restored setpoints type-checked** - a non-int value in storage is
+  discarded instead of crashing setup with a TypeError.
+- **Energy guard** - live `max_power_raw` is capped at 1.5x rated, so a
+  garbage read (0xFFFF) can't widen the plausibility guard to accept anything.
+- **Solar surplus blueprint** - skips limit writes when current is already at
+  the entity maximum and skips Stop when charging is already off. This avoids
+  repeated no-op Modbus commands on its periodic safety checks.
+- **Stop confirmation and retries** - a requested Stop remains pending until a
+  fresh status read confirms inactivity. Failed or unapplied Stop commands are
+  retried, including after a reload, with failure counts exposed in diagnostics.
+- **Safer starts** - staged current and power limits are sent before the Start
+  command. An uncertain limit or Start write triggers a compensating Stop.
+  Firmware can resume charging on a limit write, so a zero-surge start cannot
+  be guaranteed by this protocol.
+- **Persistence and readings** - stopped-state limit changes are saved before
+  the service returns, and implausible nonzero session-energy resets are
+  rejected. Charging Started/Stopped device triggers now follow session state
+  across a vehicle pause.
+- **Solar surplus blueprint units** - W and kW grid sensors are handled
+  explicitly; missing, invalid, or unsupported readings stop charging.
+
+Developed with assistance from Codex and Claude.
+
 ## 2.4.2
 
-**Fixed**
-- Shipped the Solar Surplus Charging automation blueprint that was documented
-  and tested but accidentally omitted from the 2.4.1 release. Its adjustment
-  dwell timer now measures actual Max Charging Current changes rather than
-  the automation's once-per-minute trigger time, so regular surplus
-  adjustments continue to run as intended.
+**Fixed** - Shipped the Solar Surplus Charging automation blueprint that was
+documented and tested but accidentally omitted from 2.4.1. Its adjustment
+dwell timer measures actual Max Charging Current changes rather than the
+automation's once-per-minute trigger time, so regular surplus adjustments
+continue to run as intended.
 
 ## 2.4.1
 
-**Fixed**
-- Power-limit writes now allow the charger up to three refreshes to reflect
-  the new setpoint before reporting a mismatch. A request superseded by a
-  newer desired value no longer emits a misleading warning.
-- Test fixtures use documentation-only network addresses.
+**Fixed** — an external automation wrote Max Charging Power while charging
+was intentionally stopped. On this firmware, writing that register can
+resume charging. The integration's natural-start detection then treated
+the unexpected resume as intentional and its heartbeat kept the session
+running.
+
+- `number.py`'s two reassertable-register writes (Max Charging Current/
+  Power) now always record the desired value, but only submit the
+  physical write when charging is genuinely, currently active - decided
+  fresh inside the command lock, atomically with the write.
+- Closed a second race in the start path: a concurrent stop's flag-clear
+  (synchronous, lock-free) could previously be silently overwritten by a
+  start write's success handling if that handler ran after the lock was
+  already released. The desired-state transition now happens inside the
+  same locked section as the write itself.
+- New `_stop_inhibit` latch: while HA has just intentionally stopped
+  charging, an unexpected resume no longer gets natural-start detection's
+  blessing - no `_charging_desired`, no heartbeat reinforcement. Cleared
+  on an explicit successful start or the vehicle physically disconnecting.
+  Persisted across restarts, including a startup-path bug (found in
+  review) where a Core restart mid-inhibit would otherwise have silently
+  re-armed the exact session the latch was protecting against.
+- A failed stop attempt no longer restores `_charging_desired`/clears the
+  inhibit on the theory that "still active means still wanted" - the
+  integration can't tell that apart from the incident condition, so it
+  now fails toward the protective branch instead.
+
+## 2.4.0
+
+**Fixed** — three real bugs identified by an independent review of the live
+v2.3.3 deployment, plus a diagnostics privacy gap.
+
+- **Energy guard: the cumulative-window corruption check could falsely
+  reject legitimate 7.3kW readings.** It was missing the same one-quantum
+  floor the per-poll check already had, so two genuine 0.1kWh register
+  ticks landing within ~55s (a normal ~10-13s poll cadence) could exceed
+  the old threshold and get rejected. Also fixed: a legitimate
+  session-boundary reset (`current_energy_raw` resetting to ~0) used to
+  push a large negative delta into the same rolling window, which could
+  mask a real corruption arriving shortly after for up to 30 minutes. The
+  window now stores raw observations instead of deltas and is cleared and
+  reseeded on a confirmed reset.
+- **Energy guard: a corrupt first-ever reading after any HA restart wasn't
+  caught.** The only defense for a first-ever reading was a very loose
+  absolute ceiling (100,000 kWh) — the known real incident value
+  (raw=65800, i.e. 6580.0 kWh) sailed straight through it, and because the
+  last-known-good tracking was in-memory only, this weak path was hit again
+  on every single restart. The last-known-good baseline is now persisted
+  via HA's `Store` helper, so the first live reading after a restart is
+  checked against a realistic prior value instead.
+- **Command lock: a poll-driven setpoint write could silently resume
+  charging in the instant after a stop command.** `_reassert_setpoints()`
+  ran synchronously inside the poll cycle's own executor thread, gated only
+  on a stale status snapshot, racing against `switch.py`'s event-loop-driven
+  stop write — and writing the charge-limit setpoint registers is itself an
+  implicit "resume charging" on this firmware. Replaced with one
+  `asyncio.Lock` serializing every charger-control write (start, stop,
+  heartbeat setpoint pushes), with the generation/desired-state/freshness/
+  fault gates re-checked fresh inside the lock immediately before each
+  write. The old poll-driven writer is deleted entirely — the heartbeat
+  task's existing wake-on-session-start behavior already covers what it was
+  for.
+- **Diagnostics: the charger's hardware serial number wasn't redacted**
+  from diagnostics downloads, alongside the existing host/RFID redaction.
+
+**Known, deliberately-scoped residual (tracked, not fixed here):**
+`number.py`/`select.py`'s user-initiated setpoint writes (Max Charging
+Current/Power) still go directly to the charger, outside the new command
+lock — a user changing a setpoint in the same narrow window as a stop could
+in principle still interleave. Far lower risk than the automatic
+poll-driven pattern this release closes (which fired unconditionally every
+poll during any active session), and self-corrects via the heartbeat's next
+tick regardless. Candidate follow-up: route those writes through the same
+lock via a thin `async_send_setpoint_user()`-style method.
+
+## 2.3.3
+
+**Fixed** — the background heartbeat loop could die silently.
+
+- `_heartbeat_loop`'s `while True` body was unguarded. `_heartbeat_tick`
+  already guards its own register writes, but everything else in an
+  iteration - the interval calculation, the wait, the gate checks - was not:
+  one unexpected exception from any of it would end the task with no
+  traceback anyone would see until GC, and nothing restarts it short of an HA
+  restart. That is the worst failure mode this loop has, because the loop *is*
+  the safety guarantee - once it stops, the charger reverts 0x3001/0x3002 to
+  maximum at the end of the current Command Time Validity window, mid-session,
+  with nothing left running to notice. Each iteration is now wrapped: errors
+  are logged with a full traceback and the loop backs off to the default
+  interval and continues. `CancelledError` is explicitly re-raised so unload
+  still stops the task cleanly instead of hanging on its own await.
+
+## 2.3.2
+
+**Fixed** — solar-surplus blueprint only. No change to the integration code.
+
+- **The blueprint could never actually adjust charging current.** Its
+  minimum-dwell gate was measured from `this.attributes.last_triggered`, but HA
+  stamps that at the start of *every* automation run - including the
+  once-a-minute `time_pattern` tick and every no-op pass through the hysteresis
+  band. With a trigger firing at least once a minute, `now() - last_triggered`
+  could never exceed ~60s, so the default two-minute dwell never elapsed: after
+  the very first run, both the raise and lower branches were permanently
+  unreachable. The automation could only ever fail-safe-stop, never modulate.
+  The dwell is now measured from the Max Charging Current entity's own
+  `last_changed` - the time the setpoint last actually moved, which is the
+  thing being throttled.
+- Writes are now skipped when they would change nothing, which the new dwell
+  reference depends on: a no-op re-write leaves `last_changed` frozen, holding
+  the gate permanently open and reintroducing the per-minute write loop the
+  dwell exists to prevent. Specifically - the raise branch no longer re-writes
+  the setpoint once it is already pinned at the entity's maximum, and the
+  below-minimum stop no longer re-issues `switch.turn_off` every minute at an
+  already-stopped charger.
+- The fail-safe stop (grid sensor unavailable) is likewise no longer re-issued
+  every minute for the duration of the outage. It is still attempted whenever
+  the switch is not positively known to be off - an unavailable switch means we
+  do not know the session is stopped, and a safety stop should be attempted on
+  missing information rather than skipped.
+
+**Added** - `tests/test_solar_surplus_blueprint.py`: nine functional tests that
+instantiate the real blueprint as a live HA automation and drive it, rather
+than asserting on the YAML's text. Four of them fail against the 2.3.1
+blueprint. This class of bug is invisible to reading the file.
 
 ## 2.3.1
 

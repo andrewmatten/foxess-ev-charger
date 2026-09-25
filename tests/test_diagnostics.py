@@ -22,7 +22,7 @@ from tests.test_coordinator_batching import make_mock_client
 
 def make_entry() -> MagicMock:
     entry = MagicMock()
-    entry.data = {"host": "192.0.2.1", "port": 502, "slave_id": 1}
+    entry.data = {"host": "192.0.2.10", "port": 502, "slave_id": 1}
     entry.options = {"scan_interval": 10}
     return entry
 
@@ -50,7 +50,7 @@ async def test_diagnostics_redacts_serial_number(hass):
     client = make_mock_client()
     coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
     coordinator.data = coordinator._fetch()
-    coordinator.data["id_serial_number"] = "ABC123DEF456"
+    coordinator.data["id_serial_number"] = "TEST-SERIAL-0001"
     entry = make_entry()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator, "client": client,

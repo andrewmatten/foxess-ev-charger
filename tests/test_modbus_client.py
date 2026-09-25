@@ -22,7 +22,7 @@ from custom_components.foxess_charger.modbus_client import (
     FoxESSModbusClient,
 )
 
-HOST, PORT, SLAVE_ID = "192.0.2.1", 502, 1
+HOST, PORT, SLAVE_ID = "192.0.2.11", 502, 1
 
 
 class FakeSocket:

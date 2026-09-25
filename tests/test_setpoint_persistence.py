@@ -123,7 +123,10 @@ class TestNumberEntityMarksDirty:
     async def test_setting_a_reasserted_register_marks_setpoints_dirty(self, hass):
         client = MagicMock()
         client.write_holding_register.return_value = True
-        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10)
+        store = make_setpoints_store()
+        coordinator = FoxESSChargerCoordinator(
+            hass, client, scan_interval=10, setpoints_store=store,
+        )
         coordinator.data = {"max_charging_current_raw": 100}
         coordinator.async_request_refresh = AsyncMock()
 
@@ -137,8 +140,11 @@ class TestNumberEntityMarksDirty:
         with patch("custom_components.foxess_charger.number.asyncio.sleep", AsyncMock()):
             await entity.async_set_native_value(16.0)  # raw=160
 
-        assert coordinator._setpoints_dirty is True
+        assert coordinator._setpoints_dirty is False
         assert coordinator.desired_setpoints[REG_MAX_CHARGING_CURRENT] == 160
+        store.async_save.assert_awaited_once_with(
+            {"desired_setpoints": {str(REG_MAX_CHARGING_CURRENT): 160}}
+        )
 
 
 class TestValidatingAgainstDetectedCapabilities:

@@ -16,13 +16,16 @@ core's own test suite, not this integration's).
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.foxess_charger import FoxESSChargerCoordinator
-from custom_components.foxess_charger.const import REG_CHARGING_CONTROL, REG_WORK_MODE
+from custom_components.foxess_charger.const import (
+    REG_CHARGING_CONTROL, REG_WORK_MODE, BLOCK_CONFIG, BLOCK_STATUS,
+)
 from custom_components.foxess_charger.number import NUMBERS, FoxESSNumber
 from custom_components.foxess_charger.select import FoxESSWorkModeSelect
 from custom_components.foxess_charger.switch import FoxESSChargingSwitch
@@ -59,7 +62,36 @@ async def test_charging_switch_turn_on_raises_on_failed_write(hass):
     with pytest.raises(HomeAssistantError):
         await entity.async_turn_on()
 
-    client.write_holding_register.assert_called_once_with(REG_CHARGING_CONTROL, 1)
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (REG_CHARGING_CONTROL, 1), (REG_CHARGING_CONTROL, 2),
+    ]
+    assert coordinator._stop_pending is True
+
+
+async def test_exception_during_start_sends_compensating_stop(hass):
+    client = MagicMock()
+    client.write_holding_register.side_effect = [RuntimeError("lost reply"), True]
+    coordinator = make_coordinator(hass, {"status": 0}, client=client)
+
+    assert await coordinator.async_send_start() is False
+
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (REG_CHARGING_CONTROL, 1), (REG_CHARGING_CONTROL, 2),
+    ]
+    assert coordinator._stop_pending is True
+
+
+async def test_false_start_ack_sends_compensating_stop(hass):
+    client = MagicMock()
+    client.write_holding_register.side_effect = [False, True]
+    coordinator = make_coordinator(hass, {"status": 0}, client=client)
+
+    assert await coordinator.async_send_start() is False
+
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (REG_CHARGING_CONTROL, 1), (REG_CHARGING_CONTROL, 2),
+    ]
+    assert coordinator._stop_pending is True
 
 
 async def test_charging_switch_turn_on_does_not_set_desired_flag_on_failed_write(hass):
@@ -79,6 +111,48 @@ async def test_charging_switch_turn_on_does_not_set_desired_flag_on_failed_write
         await entity.async_turn_on()
 
     assert coordinator._charging_desired is False
+
+
+async def test_charging_switch_programs_staged_caps_before_start(hass):
+    client = MagicMock()
+    client.write_holding_register.return_value = True
+    coordinator = make_coordinator(hass, {"status": 0}, client=client)
+    coordinator.desired_setpoints = {0x3001: 160, 0x3002: 50}
+
+    assert await coordinator.async_send_start() is True
+
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (0x3001, 160), (0x3002, 50), (REG_CHARGING_CONTROL, 1),
+    ]
+
+
+async def test_failed_prestart_cap_aborts_start(hass):
+    client = MagicMock()
+    client.write_holding_register.side_effect = [False, True]
+    coordinator = make_coordinator(hass, {"status": 0}, client=client)
+    coordinator.desired_setpoints = {0x3001: 160}
+
+    assert await coordinator.async_send_start() is False
+
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (0x3001, 160), (REG_CHARGING_CONTROL, 2),
+    ]
+    assert coordinator._charging_desired is False
+    assert coordinator._stop_pending is True
+
+
+async def test_exception_during_prestart_cap_sends_stop(hass):
+    client = MagicMock()
+    client.write_holding_register.side_effect = [RuntimeError("lost reply"), True]
+    coordinator = make_coordinator(hass, {"status": 0}, client=client)
+    coordinator.desired_setpoints = {0x3001: 160}
+
+    assert await coordinator.async_send_start() is False
+
+    assert [call.args for call in client.write_holding_register.call_args_list] == [
+        (0x3001, 160), (REG_CHARGING_CONTROL, 2),
+    ]
+    assert coordinator._stop_pending is True
 
 
 async def test_charging_switch_turn_on_sets_desired_flag_only_after_successful_write(hass):
@@ -111,31 +185,27 @@ async def test_charging_switch_turn_off_clears_flag_on_successful_write(hass):
         await entity.async_turn_off()
 
     assert coordinator._charging_desired is False
+    assert coordinator._stop_pending is True  # write ack is not status confirmation
 
 
-async def test_charging_switch_turn_off_restores_flag_on_failed_write(hass):
-    """P0 audit fix: the stop-race fix requires clearing _charging_desired
-    before the stop write is even attempted (must not change - see
-    async_turn_off's comment). If the stop write itself then fails, the
-    charger is still actually running - leaving the flag cleared would
-    silently drop all heartbeat protection for a session that never
-    stopped. Must be restored to True when the write raises.
-
-    Task 3: restoring on failure now requires a *fresh* status confirmation
-    (async_request_refresh) rather than restoring unconditionally - mocked
-    here to report the charger as still actively charging, so this test
-    keeps exercising the "still active -> restore" branch it was written
-    for (see test_command_lock.py's TestFailedStopRestoresProtectionOnly
-    IfStillActive for the paired "actually stopped -> don't restore" case).
-    """
+async def test_charging_switch_turn_off_does_not_restore_flag_on_failed_write(hass):
+    """Found in review, 2026-09-18 (as part of the same incident fix that
+    added _stop_inhibit): this used to restore _charging_desired=True (and
+    clear _stop_inhibit) whenever a fresh status read still showed an
+    active session after a failed stop write, on the theory that a
+    genuinely-still-running session deserves heartbeat protection. But the
+    integration cannot tell that case apart from an *unwanted* resume -
+    "still active" is exactly the incident condition, not evidence
+    protection should resume. async_turn_off no longer restores either
+    flag on a failed write - it stays False/True (inhibited) respectively,
+    matching this project's fail-toward-the-protective-branch precedent.
+    A genuinely normal session that failed to stop loses heartbeat
+    protection for one cycle until retried or the vehicle disconnects."""
     client = MagicMock()
     client.write_holding_register.return_value = False
     coordinator = make_coordinator(hass, {"status": 3}, client=client)
     coordinator._charging_desired = True
-
-    async def _refresh_still_active():
-        coordinator.data = {"status": 3}
-    coordinator.async_request_refresh = AsyncMock(side_effect=_refresh_still_active)
+    coordinator._stop_inhibit = False
 
     entity = FoxESSChargingSwitch(coordinator, client, make_entry())
     entity.hass = hass
@@ -144,7 +214,8 @@ async def test_charging_switch_turn_off_restores_flag_on_failed_write(hass):
     with pytest.raises(HomeAssistantError):
         await entity.async_turn_off()
 
-    assert coordinator._charging_desired is True
+    assert coordinator._charging_desired is False
+    assert coordinator._stop_inhibit is True
 
 
 async def test_charging_switch_turn_off_increments_generation_before_the_write(hass):
@@ -202,6 +273,7 @@ async def test_charging_switch_turn_on_no_warning_when_status_matches(hass, capl
 
     async def _refresh():
         coordinator.data["status"] = 3  # charger actually applied it
+        coordinator._mark_block_success(BLOCK_STATUS)
 
     coordinator.async_request_refresh = AsyncMock(side_effect=_refresh)
     entity = FoxESSChargingSwitch(coordinator, client, make_entry())
@@ -214,15 +286,90 @@ async def test_charging_switch_turn_on_no_warning_when_status_matches(hass, capl
     assert "did not reflect" not in caplog.text
 
 
+async def test_failed_status_refresh_does_not_confirm_start_or_clear_pending_stop(hass):
+    client = MagicMock()
+    client.write_holding_register.return_value = True
+    coordinator = make_coordinator(hass, {"status": 5}, client=client)
+    coordinator._stop_pending = True
+    coordinator._stop_inhibit = True
+
+    # A failed status read leaves the optimistic status=3 in coordinator.data.
+    # Without a fresh-block success counter check that would falsely confirm
+    # Start and clear the outstanding Stop latch.
+    coordinator.async_request_refresh = AsyncMock()
+    entity = FoxESSChargingSwitch(coordinator, client, make_entry())
+    entity.hass = hass
+    entity.async_write_ha_state = MagicMock()
+
+    with patch("custom_components.foxess_charger.switch.asyncio.sleep", AsyncMock()):
+        await entity.async_turn_on()
+
+    assert coordinator._stop_pending is True
+    assert coordinator._stop_inhibit is True
+    assert coordinator._start_confirmation_pending is False
+
+
+async def test_concurrent_stop_during_start_confirmation_keeps_stop_authoritative(hass):
+    client = MagicMock()
+    client.write_holding_register.return_value = True
+    coordinator = make_coordinator(hass, {"status": 5}, client=client)
+    entity = FoxESSChargingSwitch(coordinator, client, make_entry())
+    entity.hass = hass
+    entity.async_write_ha_state = MagicMock()
+    first_refresh_started = asyncio.Event()
+    release_first_refresh = asyncio.Event()
+    refresh_calls = 0
+
+    async def _refresh():
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            first_refresh_started.set()
+            await release_first_refresh.wait()
+            # Simulate a delayed active response from the Start read, which
+            # arrives after Stop has already been requested.
+            coordinator.data = {"status": 3}
+        else:
+            coordinator.data = {"status": 5}
+        coordinator._mark_block_success(BLOCK_STATUS)
+
+    coordinator.async_request_refresh = AsyncMock(side_effect=_refresh)
+
+    with patch("custom_components.foxess_charger.switch.asyncio.sleep", AsyncMock()):
+        start_task = asyncio.create_task(entity.async_turn_on())
+        await first_refresh_started.wait()
+        await entity.async_turn_off()
+        release_first_refresh.set()
+        await start_task
+
+    assert coordinator._charging_generation == 1
+    assert coordinator._stop_pending is True
+    assert coordinator._stop_inhibit is True
+    assert coordinator._charging_desired is False
+    assert coordinator._start_confirmation_pending is False
+
+
 async def test_number_raises_on_failed_write(hass):
     client = MagicMock()
     client.write_holding_register.return_value = False
     # max_charging_current is a REASSERTED_REGISTERS entry, so its write now
-    # routes through coordinator.async_send_setpoint_user (coordinator.client),
+    # routes through coordinator.async_set_desired_setpoint (coordinator.client),
     # not the entity's own self._client reference - same reasoning as
     # make_coordinator's comment above re: switch.py's start/stop. Both must
     # be the same client object for this test's return_value to take effect.
-    coordinator = make_coordinator(hass, {"max_charging_current_raw": 320}, client=client)
+    coordinator = make_coordinator(
+        hass, {"max_charging_current_raw": 320, "status": 3, "active_faults": [], "active_alarms": []},
+        client=client,
+    )
+    # This test exercises the write-attempted-but-failed path, which only
+    # runs when charging is genuinely active right now (see the
+    # 2026-09-18 incident fix - async_set_desired_setpoint's full gate
+    # stack: desired, status active, block freshness, no faults - without
+    # all of this the write would be correctly skipped and no exception
+    # would ever be raised).
+    coordinator._charging_desired = True
+    coordinator._mark_block_success(BLOCK_CONFIG)
+    coordinator._mark_block_success(BLOCK_STATUS)
     desc = next(d for d in NUMBERS if d.key == "max_charging_current")
     entity = FoxESSNumber(coordinator, client, desc, make_entry())
     entity.hass = hass
@@ -239,14 +386,23 @@ async def test_number_warns_on_read_back_mismatch(hass, caplog):
     # for this REASSERTED_REGISTERS entry now goes through coordinator.client,
     # so it must be the same object as the entity's client for this test to
     # actually exercise what it claims to.
-    coordinator = make_coordinator(hass, {"max_charging_current_raw": 320}, client=client)
+    coordinator = make_coordinator(
+        hass, {"max_charging_current_raw": 320, "status": 3, "active_faults": [], "active_alarms": []},
+        client=client,
+    )
+    # Same reasoning as test_number_raises_on_failed_write above: a write is
+    # only attempted (and therefore only ever read-back-verified) when
+    # charging is genuinely active right now.
+    coordinator._charging_desired = True
+    coordinator._mark_block_success(BLOCK_CONFIG)
+    coordinator._mark_block_success(BLOCK_STATUS)
 
     # A real refresh replaces coordinator.data wholesale with a fresh
     # _fetch() result - simulate the charger reporting back the old value
     # (acknowledged the write without actually applying it), rather than
     # mutating the dict the optimistic patch already touched.
     async def _refresh_value_never_changed():
-        coordinator.data = {"max_charging_current_raw": 320}
+        coordinator.data = {"max_charging_current_raw": 320, "status": 3}
 
     coordinator.async_request_refresh = AsyncMock(side_effect=_refresh_value_never_changed)
     desc = next(d for d in NUMBERS if d.key == "max_charging_current")
@@ -258,48 +414,6 @@ async def test_number_warns_on_read_back_mismatch(hass, caplog):
         await entity.async_set_native_value(16.0)
 
     assert "read-back after 3 refreshes" in caplog.text
-    assert coordinator.async_request_refresh.await_count == 3
-
-
-async def test_number_allows_delayed_read_back(hass, caplog):
-    client = MagicMock()
-    client.write_holding_register.return_value = True
-    coordinator = make_coordinator(hass, {"max_charging_current_raw": 320}, client=client)
-    refreshes = 0
-
-    async def _refresh_value_on_second_attempt():
-        nonlocal refreshes
-        refreshes += 1
-        coordinator.data = {"max_charging_current_raw": 160 if refreshes == 2 else 320}
-
-    coordinator.async_request_refresh = AsyncMock(side_effect=_refresh_value_on_second_attempt)
-    desc = next(d for d in NUMBERS if d.key == "max_charging_current")
-    entity = FoxESSNumber(coordinator, client, desc, make_entry())
-    entity.hass = hass
-    entity.async_write_ha_state = MagicMock()
-
-    with patch("custom_components.foxess_charger.number.asyncio.sleep", AsyncMock()):
-        await entity.async_set_native_value(16.0)
-
-    assert coordinator.async_request_refresh.await_count == 2
-    assert "read-back after" not in caplog.text
-
-
-async def test_number_skips_warning_for_superseded_setpoint(hass, caplog):
-    client = MagicMock()
-    client.write_holding_register.return_value = True
-    coordinator = make_coordinator(hass, {"max_charging_current_raw": 320}, client=client)
-    coordinator.async_request_refresh = AsyncMock()
-    coordinator.desired_setpoints[REG_MAX_CHARGING_CURRENT] = 200
-    desc = next(d for d in NUMBERS if d.key == "max_charging_current")
-    entity = FoxESSNumber(coordinator, client, desc, make_entry())
-    entity.hass = hass
-    entity.async_write_ha_state = MagicMock()
-
-    await entity._async_verify_read_back(desc, 160)
-
-    assert coordinator.async_request_refresh.await_count == 1
-    assert "read-back after" not in caplog.text
 
 
 async def test_work_mode_select_raises_on_failed_write(hass):

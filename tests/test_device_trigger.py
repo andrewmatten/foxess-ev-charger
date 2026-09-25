@@ -37,6 +37,7 @@ async def _setup_device_and_entities(hass, keys: list[str]):
     entity_registry = er.async_get(hass)
     domain_by_key = {
         "vehicle_connected": "binary_sensor", "is_charging": "binary_sensor",
+        "charging": "switch",
         "has_fault": "binary_sensor", "has_alarm": "binary_sensor",
         "last_session_duration": "sensor",
     }
@@ -51,7 +52,7 @@ async def _setup_device_and_entities(hass, keys: list[str]):
 
 async def test_get_triggers_returns_all_types_when_all_entities_present(hass):
     entry, device = await _setup_device_and_entities(hass, [
-        "vehicle_connected", "is_charging", "has_fault", "has_alarm",
+        "vehicle_connected", "is_charging", "charging", "has_fault", "has_alarm",
         "last_session_duration",
     ])
 
@@ -86,7 +87,7 @@ async def test_get_triggers_omits_disabled_entities(hass):
     from homeassistant.helpers import entity_registry as er
 
     entry, device = await _setup_device_and_entities(hass, [
-        "vehicle_connected", "is_charging",
+        "vehicle_connected", "is_charging", "charging",
     ])
     entity_registry = er.async_get(hass)
     entry_entity = entity_registry.async_get_or_create(
@@ -123,7 +124,7 @@ async def test_get_triggers_ignores_entities_from_other_integrations(hass):
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
 
-    entry, device = await _setup_device_and_entities(hass, ["is_charging"])
+    entry, device = await _setup_device_and_entities(hass, ["is_charging", "charging"])
     entity_registry = er.async_get(hass)
     other_entry = MockConfigEntry(domain="other_integration", data={})
     other_entry.add_to_hass(hass)
@@ -150,14 +151,14 @@ class TestAttachTrigger:
         ) as mock_attach:
             await async_attach_trigger(
                 hass,
-                {"entity_id": "binary_sensor.foo_is_charging", "type": "charging_started"},
+                {"entity_id": "switch.foo_charging", "type": "charging_started"},
                 action=AsyncMock(),
                 trigger_info={},
             )
 
         validated_cfg = mock_validate.call_args.args[1]
         assert validated_cfg["platform"] == "state"
-        assert validated_cfg["entity_id"] == "binary_sensor.foo_is_charging"
+        assert validated_cfg["entity_id"] == "switch.foo_charging"
         assert validated_cfg["to"] == "on"
         mock_attach.assert_called_once()
 
@@ -171,7 +172,7 @@ class TestAttachTrigger:
         ):
             await async_attach_trigger(
                 hass,
-                {"entity_id": "binary_sensor.foo_is_charging", "type": "charging_stopped"},
+                {"entity_id": "switch.foo_charging", "type": "charging_stopped"},
                 action=AsyncMock(),
                 trigger_info={},
             )
@@ -196,7 +197,7 @@ class TestSessionCompletedTrigger:
     async def test_attaches_a_listener_for_the_session_completed_event(self, hass):
         from custom_components.foxess_charger.const import EVENT_SESSION_COMPLETED
 
-        entry, device = await _setup_device_and_entities(hass, ["is_charging"])
+        entry, device = await _setup_device_and_entities(hass, ["is_charging", "charging"])
         action = AsyncMock()
 
         remove = await async_attach_trigger(
@@ -222,7 +223,7 @@ class TestSessionCompletedTrigger:
         device B's trigger."""
         from custom_components.foxess_charger.const import EVENT_SESSION_COMPLETED
 
-        entry, device = await _setup_device_and_entities(hass, ["is_charging"])
+        entry, device = await _setup_device_and_entities(hass, ["is_charging", "charging"])
         action = AsyncMock()
 
         remove = await async_attach_trigger(
@@ -248,7 +249,7 @@ class TestSessionCompletedTrigger:
         without a matching event" - already covered by the two tests above.
         This test just documents the property explicitly: attaching the
         trigger by itself, with no event fired, must not call the action."""
-        entry, device = await _setup_device_and_entities(hass, ["is_charging"])
+        entry, device = await _setup_device_and_entities(hass, ["is_charging", "charging"])
         action = AsyncMock()
 
         remove = await async_attach_trigger(

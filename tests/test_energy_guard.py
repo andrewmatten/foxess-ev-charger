@@ -212,11 +212,18 @@ class TestSessionBoundaryDecrease:
         itself at/near zero (e.g. the session started mid-count from
         whatever total_energy happened to read)."""
         decision = decide_energy_reading(
-            "current_energy_raw", raw=210, prev=530, prev_ts=0.0, now=13.0,
+            "current_energy_raw", raw=2, prev=530, prev_ts=0.0, now=13.0,
             max_power_kw=RATED_KW, allow_decrease=True, session_boundary=True,
         )
         assert decision.accepted
-        assert decision.value == 210
+        assert decision.value == 2
+
+    def test_implausible_nonzero_boundary_value_is_rejected(self):
+        decision = decide_energy_reading(
+            "current_energy_raw", raw=210, prev=530, prev_ts=0.0, now=13.0,
+            max_power_kw=RATED_KW, allow_decrease=True, session_boundary=True,
+        )
+        assert not decision.accepted
 
     def test_unexplained_mid_session_decrease_is_rejected(self):
         """5.3kWh -> 2.1kWh with no session boundary and not near zero -
