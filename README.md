@@ -30,7 +30,7 @@ Entities disabled by default (phase-switch-box / three-phase only):
 ### Manual
 
 1. Download this repository.
-2. Copy **all files** into a new folder named `custom_components/foxess_charger/` inside your Home Assistant config directory. (The repository is flat — its files become the contents of that folder.)
+2. Copy the repository's `custom_components/foxess_charger` folder into the `custom_components/` folder of your Home Assistant config directory (so the result is `custom_components/foxess_charger/manifest.json`).
 3. Restart Home Assistant.
 
 ## Configuration
@@ -44,6 +44,8 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Slave ID  | Modbus unit/slave ID (default `1`)                 |
 
 The connection is verified during setup — if the charger can't be reached, you'll see an error on the form immediately rather than a silently-broken entry.
+
+**The charger's Work Mode must be set to Plug&Charge.** Controlled and Locked modes will not start charging with this integration; Home Assistant raises a Repairs warning if the charger is in either.
 
 The scan interval is configurable via the integration options (default 10 s, range 5-300 s).
 

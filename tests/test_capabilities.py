@@ -64,7 +64,7 @@ def make_number(key: str, coordinator_data: dict) -> FoxESSNumber:
     desc = next(d for d in NUMBERS if d.key == key)
     coordinator = MagicMock()
     coordinator.data = coordinator_data
-    return FoxESSNumber(coordinator, MagicMock(), desc, make_entry())
+    return FoxESSNumber(coordinator, desc, make_entry())
 
 
 class TestDynamicNumberBounds:

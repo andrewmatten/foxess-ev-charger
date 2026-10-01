@@ -38,7 +38,7 @@ from custom_components.foxess_charger.number import NUMBERS
 from custom_components.foxess_charger.sensor import SENSORS
 
 _TRANSLATIONS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "translations"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "foxess_charger", "translations"
 )
 
 

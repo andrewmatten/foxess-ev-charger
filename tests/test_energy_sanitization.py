@@ -1,363 +1,295 @@
-"""Coordinator-level tests for the 2026-09 (second audit) energy
-sanitization gaps: the stateful wiring around energy_guard.py's pure
-functions, which tests/test_energy_guard.py itself can't exercise (it never
-touches FoxESSChargerCoordinator at all).
+"""Stateful energy sanitisation around energy_guard.py's pure decisions.
 
-Covers:
-1. The coordinator's own session-tracking state (_prev_status vs. the
-   current poll's status) cross-referenced into decide_energy_reading()'s
-   session_boundary param - see FoxESSChargerCoordinator._sanitize_energy.
-2. The rolling-window sustained-corruption check (check_cumulative_window),
-   wired via self._energy_window.
+Ported from the 2.4.3 coordinator tests (``_sanitize_energy``) to the
+rebuild's EnergyTracker, driven through its public ``apply`` with a manual
+clock, and to the polling coordinator where the session-boundary signal is
+derived. Covers:
 
-Uses _sanitize_energy() directly (not a full _fetch()) - it's the coordinator
-method these gaps actually live in, and calling it directly avoids having to
-fabricate a full register block for every poll.
+1. The session-boundary cross-reference (the coordinator's own session
+   tracking decides whether a decrease of current_energy_raw is a reset).
+2. The first-observation absolute bound.
+3. The rolling-window sustained-corruption check, its reset after a
+   rejection and after a counter reset.
+4. Rejections never becoming the new anchor.
+5. A full quantised 30-minute trace at rated power is never rejected.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
-from custom_components.foxess_charger import FoxESSChargerCoordinator
 from custom_components.foxess_charger.const import ENERGY_QUANTUM_KWH
+from custom_components.foxess_charger.coordinator import FoxESSChargerCoordinator
+from custom_components.foxess_charger.energy import EnergyTracker
+
+from fake_controller import FakeController
 
 RATED_KW = 7.3  # A7300P1-E-B-WO single-phase max
 
 
-def make_coordinator(hass) -> FoxESSChargerCoordinator:
-    return FoxESSChargerCoordinator(hass, MagicMock(), scan_interval=10)
+class Clock:
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def make_tracker(clock: Clock | None = None) -> tuple[EnergyTracker, Clock]:
+    clock = clock or Clock()
+    # Wall and monotonic clocks move together, so restore()/export() map
+    # timestamps 1:1 and a baseline can be seeded at an exact instant.
+    return EnergyTracker(clock=clock, wall_clock=clock), clock
+
+
+def seed(tracker: EnergyTracker, key: str, raw: int, at: float) -> None:
+    """Last-known-good baseline recorded at ``at`` (as after a restart)."""
+    tracker.restore({key: {"raw": raw, "wall_ts": at}})
+
+
+def sanitize(tracker: EnergyTracker, key: str, raw: int, *, boundary: bool = False,
+             max_power_raw: int = 73) -> int | None:
+    """Feeds one reading; returns it if accepted, None if rejected."""
+    # The rejection log is capped, so detect a new entry by identity.
+    last = tracker.rejections[-1] if tracker.rejections else None
+    data = {key: raw, "max_power_raw": max_power_raw}
+    tracker.apply(data, session_boundary=boundary)
+    if tracker.rejections and tracker.rejections[-1] is not last:
+        # Rejected: the published value is the last good one (or absent).
+        assert data.get(key) == tracker.last_good(key)
+        return None
+    assert data[key] == raw
+    return raw
+
+
+# ── 1. session-boundary cross-reference (through the coordinator) ─────────
+
+async def _coordinator(hass, fake: FakeController, clock: Clock) -> FoxESSChargerCoordinator:
+    coordinator = FoxESSChargerCoordinator(hass, fake, 10)
+    # Guard on a manual clock so the reset's plausibility window is explicit.
+    coordinator.energy = EnergyTracker(clock=clock, wall_clock=clock)
+    await coordinator.async_refresh()
+    assert coordinator.last_update_success
+    return coordinator
 
 
 class TestSessionBoundaryCrossReference:
-    """current_energy_raw's allow_decrease no longer accepts any decrease
-    unconditionally - a decrease is trusted when the coordinator's own
-    _prev_status -> data["status"] transition confirms a real session
-    boundary just occurred, even if the new value isn't itself near zero."""
+    """A decrease of current_energy_raw that is not near zero is trusted only
+    when the coordinator's own session tracking saw an inactive -> active
+    transition on this poll."""
 
-    def test_decrease_coinciding_with_a_real_session_start_is_accepted(self, hass):
-        coordinator = make_coordinator(hass)
-        coordinator._prev_status = 1  # connected (inactive)
-        coordinator._last_energy["current_energy_raw"] = (530, 0.0)
+    async def test_decrease_coinciding_with_a_real_session_start_is_accepted(self, hass):
+        fake = FakeController(status=1)          # connected, inactive
+        fake.hw["current_energy_raw"] = 530
+        clock = Clock()
+        coordinator = await _coordinator(hass, fake, clock)
+        clock.t += 3 * 3600                      # a new session hours later
+        fake.hw["status"] = 3                    # transitioning into charging
+        fake.hw["current_energy_raw"] = 210      # decrease, not near zero
+        await coordinator.async_refresh()
+        assert coordinator.data["current_energy_raw"] == 210
+        assert coordinator.energy.rejections == []
 
-        result = coordinator._sanitize_energy(
-            "current_energy_raw", 210,  # decrease, not near zero
-            {"status": 3, "max_power_raw": 73},  # transitioning into charging
-        )
+    async def test_decrease_without_a_session_transition_is_rejected(self, hass):
+        fake = FakeController(status=3)          # already charging
+        fake.hw["current_energy_raw"] = 530
+        clock = Clock()
+        coordinator = await _coordinator(hass, fake, clock)
+        clock.t += 3 * 3600
+        fake.hw["current_energy_raw"] = 210      # unexplained mid-session drop
+        await coordinator.async_refresh()
+        assert coordinator.data["current_energy_raw"] == 530
+        assert len(coordinator.energy.rejections) == 1
 
-        assert result == 210
+    async def test_decrease_to_zero_is_still_accepted_without_a_confirmed_boundary(self, hass):
+        fake = FakeController(status=3)
+        fake.hw["current_energy_raw"] = 176
+        clock = Clock()
+        coordinator = await _coordinator(hass, fake, clock)
+        clock.t += 13
+        fake.hw["current_energy_raw"] = 0
+        await coordinator.async_refresh()
+        assert coordinator.data["current_energy_raw"] == 0
+        assert coordinator.energy.rejections == []
 
-    def test_decrease_without_a_session_transition_is_rejected(self, hass):
-        coordinator = make_coordinator(hass)
-        coordinator._prev_status = 3  # already charging - no transition
-        coordinator._last_energy["current_energy_raw"] = (530, 0.0)
 
-        result = coordinator._sanitize_energy(
-            "current_energy_raw", 210,  # unexplained mid-session drop
-            {"status": 3, "max_power_raw": 73},  # still charging, same status
-        )
-
-        assert result is None
-        assert len(coordinator.energy_rejections) == 1
-
-    def test_decrease_to_zero_is_still_accepted_without_a_confirmed_boundary(self, hass):
-        """The weak signal (near-zero) alone remains sufficient - unchanged
-        common-case behaviour."""
-        coordinator = make_coordinator(hass)
-        coordinator._prev_status = 3  # no transition detected
-        coordinator._last_energy["current_energy_raw"] = (176, 0.0)
-
-        result = coordinator._sanitize_energy(
-            "current_energy_raw", 0, {"status": 3, "max_power_raw": 73},
-        )
-
-        assert result == 0
-
+# ── 2. first observation ──────────────────────────────────────────────────
 
 class TestFirstObservationAbsoluteBound:
-    def test_corrupt_first_reading_for_a_key_is_rejected(self, hass):
-        coordinator = make_coordinator(hass)
-        # 200,000 kWh - no home EV charger has ever delivered this lifetime.
-        raw = int(200_000 / ENERGY_QUANTUM_KWH)
+    def test_corrupt_first_reading_for_a_key_is_rejected(self):
+        tracker, _ = make_tracker()
+        raw = int(200_000 / ENERGY_QUANTUM_KWH)   # 200,000 kWh lifetime
+        assert sanitize(tracker, "total_energy_raw", raw) is None
+        assert tracker.rejections[-1]["last_good_kwh"] is None
 
-        result = coordinator._sanitize_energy(
-            "total_energy_raw", raw, {"status": 1, "max_power_raw": 73},
-        )
 
-        assert result is None
-        assert coordinator.energy_rejections[-1]["last_good_kwh"] is None
-
+# ── 3. rolling window ─────────────────────────────────────────────────────
 
 class TestSustainedWindowCorruption:
-    """A sustained one-register-quantum-per-poll corruption passes the
-    per-poll decision every single time (the per-poll floor unconditionally
-    allows one quantum), but the coordinator's rolling window must catch the
-    implied sustained rate once enough samples have accumulated."""
-
-    def test_real_intermittent_charging_never_trips_the_window(self, hass, monkeypatch):
-        """Realistic pattern: several genuine, well-spaced quantum steps at
-        a rate the charger could actually sustain - must never be flagged."""
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
+    def test_real_intermittent_charging_never_trips_the_window(self):
+        tracker, clock = make_tracker()
         raw = 1000
         for _ in range(8):
-            result = coordinator._sanitize_energy(
-                "total_energy_raw", raw, {"status": 3, "max_power_raw": 73},
-            )
-            assert result == raw
-            raw += 1        # one quantum
-            mono_ts[0] += 300.0  # 5 minutes apart - well within rated 7.3kW capability
-
-    def test_sustained_one_quantum_per_poll_is_eventually_rejected(self, hass, monkeypatch):
-        """~13s polls, one quantum accepted every single time - the implied
-        sustained rate (~27.7kW) is nearly 4x this hardware's rated 7.3kW
-        max. Each individual delta passes on its own; the rolling window
-        must catch the aggregate."""
-        coordinator = make_coordinator(hass)
-        raw = 1000
-        mono_ts = [0.0]
-
-        def fake_monotonic():
-            return mono_ts[0]
-
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", fake_monotonic,
-        )
-
-        results = []
-        for _ in range(200):
-            result = coordinator._sanitize_energy(
-                "total_energy_raw", raw, {"status": 3, "max_power_raw": 73},
-            )
-            results.append(result)
+            assert sanitize(tracker, "total_energy_raw", raw) == raw
             raw += 1
-            mono_ts[0] += 13.0
+            clock.t += 300.0   # one quantum per 5 minutes: well within 7.3 kW
 
-        # Every individual delta is one quantum - the per-poll check alone
-        # would accept every single one. The rolling window must have
-        # rejected at least one poll once it accumulated enough samples.
+    def test_sustained_one_quantum_per_poll_is_eventually_rejected(self):
+        """~13 s polls, one quantum each (~27.7 kW sustained). Each delta
+        passes on its own; the rolling window must catch the aggregate."""
+        tracker, clock = make_tracker()
+        raw, results = 1000, []
+        for _ in range(200):
+            results.append(sanitize(tracker, "total_energy_raw", raw))
+            raw += 1
+            clock.t += 13.0
         assert None in results
 
-    def test_window_resets_after_a_rejection_so_it_can_recover(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
+    def test_window_resets_after_a_rejection_so_it_can_recover(self):
+        # The window's contents have no public view; asserting them directly
+        # is the only way to pin "restarts empty after a rejection".
+        tracker, clock = make_tracker()
         raw = 1000
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-
-        rejected_at = None
-        for i in range(200):
-            result = coordinator._sanitize_energy(
-                "total_energy_raw", raw, {"status": 3, "max_power_raw": 73},
-            )
-            if result is None and rejected_at is None:
-                rejected_at = i
-                assert coordinator._energy_window["total_energy_raw"] == []
+        for _ in range(200):
+            if sanitize(tracker, "total_energy_raw", raw) is None:
                 break
             raw += 1
-            mono_ts[0] += 13.0
-
-        assert rejected_at is not None
-
-
-class TestSessionBoundaryDoesNotPoisonTheWindow:
-    """Bug B: a session-boundary reset's large negative delta must never
-    sit in the rolling window offsetting a later corrupt read."""
-
-    def test_session_reset_clears_and_reseeds_the_window(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._prev_status = 3  # already charging
-        coordinator._last_energy["current_energy_raw"] = (530, 0.0)
-        # Pre-populate the window with some in-session history.
-        coordinator._energy_window["current_energy_raw"] = [
-            (0.0, 500), (10.0, 510), (20.0, 530),
-        ]
-        mono_ts[0] = 30.0
-
-        result = coordinator._sanitize_energy(
-            "current_energy_raw", 0,  # reset to zero
-            {"status": 3, "max_power_raw": 73},
-        )
-        # session_boundary is only True on an inactive->active transition;
-        # _prev_status=3 (already active) means this is NOT a coordinator-
-        # confirmed boundary, only the weak near-zero signal - decide_energy_reading
-        # still accepts it (near-zero decrease is always accepted), and the
-        # window must still be cleared/reseeded because the *result* looks
-        # like a reset regardless of which signal justified accepting it.
-        assert result == 0
-        assert coordinator._energy_window["current_energy_raw"] == [(30.0, 0)]
-
-    def test_reset_does_not_mask_a_later_corrupt_spike(self, hass, monkeypatch):
-        """Before this fix: the reset's -53.0kWh delta would sit in the
-        window; a +40kWh corrupt spike shortly after would sum to -13kWh,
-        never tripping check_cumulative_window (which only checks
-        total > max_plausible, never negative sums). After this fix, the
-        window was reseeded at the reset, so the spike is judged on its own
-        merits by decide_energy_reading's per-poll check and rejected
-        outright (100kWh in one poll is nowhere near plausible)."""
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._prev_status = 3
-        coordinator._last_energy["current_energy_raw"] = (530, 0.0)
-        coordinator._sanitize_energy(
-            "current_energy_raw", 0, {"status": 3, "max_power_raw": 73},
-        )
-        mono_ts[0] = 15.0
-        result = coordinator._sanitize_energy(
-            "current_energy_raw", 1000,  # +100kWh in 15s - not plausible
-            {"status": 3, "max_power_raw": 73},
-        )
-        assert result is None
-        assert coordinator.energy_rejections[-1]["rejected_kwh"] == 100.0
+            clock.t += 13.0
+        else:
+            pytest.fail("window never tripped")
+        assert tracker._window["total_energy_raw"] == []
 
 
 class TestWindowStoresRawObservationsNotDeltas:
-    def test_window_entries_are_timestamp_raw_pairs(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._sanitize_energy(
-            "total_energy_raw", 1000, {"status": 3, "max_power_raw": 73},
-        )
-        mono_ts[0] = 13.0
-        coordinator._sanitize_energy(
-            "total_energy_raw", 1001, {"status": 3, "max_power_raw": 73},
-        )
-        assert coordinator._energy_window["total_energy_raw"] == [(0.0, 1000), (13.0, 1001)]
+    def test_window_entries_are_timestamp_raw_pairs(self):
+        # Internal representation, asserted directly (no public view).
+        tracker, clock = make_tracker()
+        assert sanitize(tracker, "total_energy_raw", 1000) == 1000
+        clock.t = 13.0
+        assert sanitize(tracker, "total_energy_raw", 1001) == 1001
+        assert tracker._window["total_energy_raw"] == [(0.0, 1000), (13.0, 1001)]
 
+
+class TestSessionBoundaryDoesNotPoisonTheWindow:
+    """A counter reset's large negative delta must never sit in the rolling
+    window offsetting a later corrupt read."""
+
+    @staticmethod
+    def _polls_until_window_trips(tracker: EnergyTracker, clock: Clock, start_raw: int) -> int:
+        raw = start_raw
+        for i in range(1, 400):
+            clock.t += 13.0
+            raw += 1
+            if sanitize(tracker, "current_energy_raw", raw) is None:
+                return i
+        pytest.fail("window never tripped")
+
+    def test_session_reset_clears_and_reseeds_the_window(self):
+        """In-session history before a reset to zero must not influence the
+        window afterwards: the post-reset corruption trips after exactly as
+        many polls as on a tracker that started at the reset."""
+        tracker, clock = make_tracker()
+        for raw in (500, 501, 502, 503):
+            assert sanitize(tracker, "current_energy_raw", raw) == raw
+            clock.t += 300.0
+        clock.t = 2000.0
+        # Near-zero reset, no confirmed boundary: accepted on the weak signal.
+        assert sanitize(tracker, "current_energy_raw", 0) == 0
+        after_reset = self._polls_until_window_trips(tracker, clock, 0)
+
+        fresh, fresh_clock = make_tracker(Clock(2000.0))
+        assert sanitize(fresh, "current_energy_raw", 0) == 0
+        assert after_reset == self._polls_until_window_trips(fresh, fresh_clock, 0)
+
+    def test_reset_does_not_mask_a_later_corrupt_spike(self):
+        tracker, clock = make_tracker()
+        seed(tracker, "current_energy_raw", 530, at=0.0)
+        assert sanitize(tracker, "current_energy_raw", 0) == 0
+        clock.t = 15.0
+        assert sanitize(tracker, "current_energy_raw", 1000) is None  # +100 kWh in 15 s
+        assert tracker.rejections[-1]["rejected_kwh"] == 100.0
+
+
+# ── 4. rejections never become the anchor ─────────────────────────────────
 
 class TestRejectionNeverBecomesTheNewAnchor:
-    def test_per_poll_rejection_leaves_last_energy_and_window_untouched(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._last_energy["total_energy_raw"] = (1000, 0.0)
-        coordinator._energy_window["total_energy_raw"] = [(0.0, 1000)]
-        mono_ts[0] = 13.0
+    def test_per_poll_rejection_leaves_last_energy_and_window_untouched(self):
+        tracker, clock = make_tracker()
+        assert sanitize(tracker, "total_energy_raw", 1000) == 1000
+        clock.t = 13.0
+        assert sanitize(tracker, "total_energy_raw", 65800) is None  # the 6580.0 kWh incident value
+        assert tracker.last_good("total_energy_raw") == 1000
+        # The window still holds only the t=0 sample: a plausible reading is
+        # judged against it and accepted.
+        clock.t = 300.0
+        assert sanitize(tracker, "total_energy_raw", 1001) == 1001
 
-        result = coordinator._sanitize_energy(
-            "total_energy_raw", 65800,  # the real 6580.0kWh incident value
-            {"status": 3, "max_power_raw": 73},
-        )
-        assert result is None
-        assert coordinator._last_energy["total_energy_raw"] == (1000, 0.0)
-        assert coordinator._energy_window["total_energy_raw"] == [(0.0, 1000)]
+    def test_two_consecutive_corrupt_reads_both_compare_against_the_same_anchor(self):
+        tracker, clock = make_tracker()
+        seed(tracker, "total_energy_raw", 1000, at=0.0)
+        clock.t = 13.0
+        assert sanitize(tracker, "total_energy_raw", 65800) is None
+        clock.t = 26.0
+        assert sanitize(tracker, "total_energy_raw", 65800) is None
+        assert [r["last_good_raw"] for r in tracker.rejections] == [1000, 1000]
+        assert tracker.last_good("total_energy_raw") == 1000
 
-    def test_two_consecutive_corrupt_reads_both_compare_against_the_same_anchor(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._last_energy["total_energy_raw"] = (1000, 0.0)
-        mono_ts[0] = 13.0
-        r1 = coordinator._sanitize_energy("total_energy_raw", 65800, {"status": 3, "max_power_raw": 73})
-        mono_ts[0] = 26.0
-        r2 = coordinator._sanitize_energy("total_energy_raw", 65800, {"status": 3, "max_power_raw": 73})
-        assert r1 is None and r2 is None
-        assert coordinator._last_energy["total_energy_raw"] == (1000, 0.0)
 
+# ── 5. a legitimate 30-minute quantised trace ─────────────────────────────
 
 class TestFullThirtyMinuteQuantisedTraceAtRatedPower:
-    """A real continuous 7.3kW charge, simulated as a continuous energy
-    accumulator polled every 10s, register reporting floor(accumulated /
-    quantum). Every legitimate sample must be accepted regardless of what
-    fraction of a quantum was already banked when polling started - the
-    accumulator's starting phase inside the quantum shouldn't matter."""
-
     @pytest.mark.parametrize("phase_offset_kwh", [0.0, 0.025, 0.05, 0.075, 0.099])
-    def test_every_legitimate_sample_over_30_minutes_is_accepted(self, hass, monkeypatch, phase_offset_kwh):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        rated_kw = 7.3
+    def test_every_legitimate_sample_over_30_minutes_is_accepted(self, phase_offset_kwh):
+        tracker, clock = make_tracker()
         poll_interval_s = 10.0
         accumulated_kwh = phase_offset_kwh
         raw = int(accumulated_kwh / ENERGY_QUANTUM_KWH)
-        coordinator._last_energy["total_energy_raw"] = (raw, 0.0)
-        coordinator._energy_window["total_energy_raw"] = [(0.0, raw)]
-
-        num_polls = int(1800 / poll_interval_s)
-        for i in range(1, num_polls + 1):
-            mono_ts[0] = i * poll_interval_s
-            accumulated_kwh += rated_kw * (poll_interval_s / 3600)
+        assert sanitize(tracker, "total_energy_raw", raw) == raw
+        for i in range(1, int(1800 / poll_interval_s) + 1):
+            clock.t = i * poll_interval_s
+            accumulated_kwh += RATED_KW * (poll_interval_s / 3600)
             new_raw = int(accumulated_kwh / ENERGY_QUANTUM_KWH)
-            result = coordinator._sanitize_energy(
-                "total_energy_raw", new_raw, {"status": 3, "max_power_raw": 73},
-            )
-            assert result == new_raw, (
-                f"poll {i} (t={mono_ts[0]}s, phase_offset={phase_offset_kwh}) "
-                f"was wrongly rejected: {coordinator.energy_rejections[-1] if coordinator.energy_rejections else 'no rejection'}"
+            assert sanitize(tracker, "total_energy_raw", new_raw) == new_raw, (
+                f"poll {i} (t={clock.t}s, phase_offset={phase_offset_kwh}) wrongly "
+                f"rejected: {tracker.rejections[-1] if tracker.rejections else None}"
             )
 
 
 class TestSustainedArtificialCorruptionThenRecovery:
-    def test_exactly_one_quantum_every_10s_is_eventually_rejected(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
+    def test_exactly_one_quantum_every_10s_is_eventually_rejected(self):
+        tracker, clock = make_tracker()
         raw = 1000
-        coordinator._last_energy["total_energy_raw"] = (raw, 0.0)
-        coordinator._energy_window["total_energy_raw"] = [(0.0, raw)]
+        assert sanitize(tracker, "total_energy_raw", raw) == raw
         results = []
         for i in range(1, 200):
-            mono_ts[0] = i * 10.0
+            clock.t = i * 10.0
             raw += 1
-            results.append(coordinator._sanitize_energy(
-                "total_energy_raw", raw, {"status": 3, "max_power_raw": 73},
-            ))
+            results.append(sanitize(tracker, "total_energy_raw", raw))
         assert None in results
 
-    def test_recovers_once_the_corruption_stops(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass)
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
+    def test_recovers_once_the_corruption_stops(self):
+        tracker, clock = make_tracker()
         raw = 1000
-        coordinator._last_energy["total_energy_raw"] = (raw, 0.0)
-        coordinator._energy_window["total_energy_raw"] = [(0.0, raw)]
-        i = 0
-        rejected = False
+        assert sanitize(tracker, "total_energy_raw", raw) == raw
+        i, rejected = 0, False
         while not rejected and i < 200:
             i += 1
-            mono_ts[0] = i * 10.0
+            clock.t = i * 10.0
             raw += 1
-            if coordinator._sanitize_energy(
-                "total_energy_raw", raw, {"status": 3, "max_power_raw": 73},
-            ) is None:
-                rejected = True
+            rejected = sanitize(tracker, "total_energy_raw", raw) is None
         assert rejected
-
-        # Corruption stops - space out real, plausible ticks from here on.
-        last_good_raw = coordinator._last_energy["total_energy_raw"][0]
+        last_good_raw = tracker.last_good("total_energy_raw")
         for _ in range(5):
             i += 1
-            # Space readings 300+ seconds apart so they're physically plausible
-            # and don't re-trigger the cumulative window check
-            mono_ts[0] = 2000 + i * 300
+            clock.t = 2000 + i * 300
             last_good_raw += 1
-            result = coordinator._sanitize_energy(
-                "total_energy_raw", last_good_raw, {"status": 3, "max_power_raw": 73},
-            )
-            assert result == last_good_raw
+            assert sanitize(tracker, "total_energy_raw", last_good_raw) == last_good_raw
+
+
+# ── energy guard with a garbage device maximum ────────────────────────────
+# (ported from test_realistic_charger::test_garbage_max_power_raw_does_not_disable_energy_guard)
+
+def test_garbage_max_power_raw_does_not_disable_energy_guard():
+    tracker, clock = make_tracker(Clock(60.0))
+    seed(tracker, "total_energy_raw", 1000, at=0.0)
+    # +5 kWh in 60 s = 300 kW, impossible on a 7.3 kW charger.
+    assert sanitize(tracker, "total_energy_raw", 1050, max_power_raw=0xFFFF) is None

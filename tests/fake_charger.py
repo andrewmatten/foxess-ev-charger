@@ -1,11 +1,11 @@
 """A behaviourally realistic fake FoxESS charger for tests.
 
 Unlike a MagicMock client (which obeys any value forever), this models the
-firmware behaviour that actually bit us on 2026-09-24:
+firmware behaviour that has been observed to do:
 
 - 0x3001/0x3002 (max charging current/power) silently revert to the
   charger's maximum ~FIRMWARE_REVERT_S after the last write to them, no
-  matter what Command Time Validity (0x3005) claims - Andrew's charger
+  matter what Command Time Validity (0x3005) claims - a real charger
   reports 180s there but still reverts at ~60s.
 - Writes can be made to fail on demand (`fail_writes`), like a dropped
   Modbus frame.

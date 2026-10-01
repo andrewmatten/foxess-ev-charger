@@ -94,7 +94,7 @@ class TestNormalOperation:
 
 class TestAnomalyDetection:
     def test_the_original_incident_is_still_rejected(self):
-        """The guard's actual original purpose: the two real 2026-08/09
+        """The guard's actual original purpose: the two real
         incidents that produced raw=65800 (6580.0 kWh) in a single poll.
         This must still fail hard under the new formula."""
         decision = decide_energy_reading(
@@ -151,7 +151,7 @@ def test_constants_match_agreed_values():
 
 
 class TestFirstObservationSanityCheck:
-    """2026-09 (second audit): a first-ever reading for a key used to be
+    """a first-ever reading for a key used to be
     accepted outright with no plausibility check at all - a corrupt first
     read became the new trusted baseline forever. The absolute
     ENERGY_ABS_MAX_KWH backstop now applies even when prev is None."""
@@ -192,7 +192,7 @@ class TestFirstObservationSanityCheck:
 
 
 class TestSessionBoundaryDecrease:
-    """2026-09 (second audit): current_energy_raw's allow_decrease=True used
+    """current_energy_raw's allow_decrease=True used
     to accept ANY decrease unconditionally. A decrease is now only accepted
     when it actually looks like a session-boundary reset."""
 
@@ -238,7 +238,7 @@ class TestSessionBoundaryDecrease:
 
 
 class TestCumulativeWindowCheck:
-    """2026-09 (second audit): a sustained corruption of exactly one
+    """a sustained corruption of exactly one
     register quantum per poll passes decide_energy_reading() every single
     time (the per-poll floor unconditionally allows one quantum), but sums
     to a physically impossible rate over a longer window."""

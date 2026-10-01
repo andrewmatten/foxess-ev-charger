@@ -1,187 +1,163 @@
-"""Tests for energy-baseline persistence (Task 2): the first live energy
-reading after a restart must be checked against a persisted last-known-good
-value, not accepted outright just because self._last_energy is empty again.
+"""Energy-baseline persistence: the first live energy reading after a restart
+is checked against a persisted last-known-good value rather than trusted.
 
-Covers: restore converts wall-clock to a synthetic monotonic baseline;
-the known 65800/6580.0kWh incident value is rejected when it arrives as the
-first live reading after a restart with a persisted normal baseline; malformed
-storage is discarded safely per-key; debounced dirty-flag saving; prompt
-persistence at session boundaries and on unload.
+Ported from the 2.4.3 coordinator tests to the rebuild: EnergyTracker
+(restore/export/dirty), ChargerStorage (Store validation of the legacy
+``_energy_baseline`` file) and the HA unload path (flush).
 """
 from __future__ import annotations
 
-import time
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.helpers.storage import Store
 
-from custom_components.foxess_charger import (
-    FoxESSChargerCoordinator, async_unload_entry, DOMAIN,
-)
+from custom_components.foxess_charger.const import DOMAIN
+from custom_components.foxess_charger.energy import EnergyTracker
+from custom_components.foxess_charger.persistence import ChargerStorage, energy_key
+
+from fake_controller import FakeController
+from ha_harness import Harness, make_entry
+
+ENTRY = "energyentry01"
 
 
-def make_coordinator(hass, energy_store=None) -> FoxESSChargerCoordinator:
-    return FoxESSChargerCoordinator(hass, MagicMock(), scan_interval=10, energy_store=energy_store)
+class Clock:
+    def __init__(self, t: float) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
 
 
-class FakeStore:
-    def __init__(self, initial=None):
-        self._data = initial
-        self.saved: list[dict] = []
+def tracker_at(mono: float, wall: float) -> tuple[EnergyTracker, Clock, Clock]:
+    m, w = Clock(mono), Clock(wall)
+    return EnergyTracker(clock=m, wall_clock=w), m, w
 
-    async def async_load(self):
-        return self._data
 
-    async def async_save(self, data):
-        self._data = data
-        self.saved.append(data)
+def feed(tracker: EnergyTracker, key: str, raw: int) -> int | None:
+    last = tracker.rejections[-1] if tracker.rejections else None
+    data = {key: raw, "max_power_raw": 73}
+    tracker.apply(data, session_boundary=False)
+    return None if tracker.rejections and tracker.rejections[-1] is not last else data[key]
 
 
 class TestRestoreConvertsWallClockToMonotonic:
-    async def test_restored_baseline_lands_in_last_energy(self, hass):
-        wall_ts = time.time() - 120  # 2 minutes ago
-        store = FakeStore({"total_energy_raw": {"raw": 3785, "wall_ts": wall_ts}})
-        coordinator = make_coordinator(hass, energy_store=store)
-
-        await coordinator.async_load_energy_state()
-
-        assert "total_energy_raw" in coordinator._last_energy
-        raw, synthetic_ts = coordinator._last_energy["total_energy_raw"]
-        assert raw == 3785
-        # synthetic_ts should be ~120s before "now" on the monotonic clock.
-        assert abs((time.monotonic() - synthetic_ts) - 120) < 5
+    def test_restored_baseline_lands_in_last_energy(self):
+        tracker, _mono, _wall = tracker_at(mono=5000.0, wall=1_790_000_000.0)
+        wall_ts = 1_790_000_000.0 - 120          # 2 minutes before "now"
+        tracker.restore({"total_energy_raw": {"raw": 3785, "wall_ts": wall_ts}})
+        assert tracker.last_good("total_energy_raw") == 3785
+        # The synthetic monotonic timestamp is 120 s in the past: exporting
+        # maps it back to the same wall-clock time.
+        assert tracker.export()["total_energy_raw"]["wall_ts"] == pytest.approx(wall_ts)
+        # And rates are judged over those 120 s: 0.3 kWh in 120 s is
+        # plausible (9 kW with margin), the same step over ~0 s would not be.
+        assert feed(tracker, "total_energy_raw", 3788) == 3788
 
 
 class TestKnownIncidentValueRejectedAfterRestartWithPersistedBaseline:
-    async def test_65800_is_rejected_as_the_first_live_reading(self, hass, monkeypatch):
-        """The actual bug: without a persisted baseline, raw=65800 sails
-        through as a trusted first-ever reading (only the 100,000kWh
-        absolute ceiling applies, and 6580.0kWh is nowhere near it). With a
-        realistic persisted baseline restored, the same first live reading
-        must go through the normal rate-based check and be rejected."""
-        wall_ts = time.time() - 60  # HA was down for ~60s
-        store = FakeStore({"total_energy_raw": {"raw": 3785, "wall_ts": wall_ts}})
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
+    def test_65800_is_rejected_as_the_first_live_reading(self):
+        tracker, _m, _w = tracker_at(mono=5000.0, wall=1_790_000_000.0)
+        tracker.restore({"total_energy_raw": {"raw": 3785, "wall_ts": 1_790_000_000.0 - 60}})
+        assert feed(tracker, "total_energy_raw", 65800) is None
+        assert tracker.rejections[-1]["last_good_raw"] == 3785
+        assert len(tracker.rejections) == 1
 
-        mono_ts = [time.monotonic()]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-
-        result = coordinator._sanitize_energy(
-            "total_energy_raw", 65800, {"status": 1, "max_power_raw": 73},
-        )
-        assert result is None
-        assert coordinator.energy_rejections[-1]["last_good_raw"] == 3785  # rejection compared against the restored baseline
-        assert len(coordinator.energy_rejections) == 1
-
-    async def test_without_a_persisted_baseline_the_same_value_would_be_accepted(self, hass):
-        """Contrast case, documenting why this task exists: a genuinely
-        fresh install (no Store data yet) has nothing to restore, so the
-        first live reading still only gets the weak absolute-ceiling check
-        - 6580.0kWh is unremarkable for that check alone."""
-        coordinator = make_coordinator(hass, energy_store=FakeStore(None))
-        await coordinator.async_load_energy_state()
-        result = coordinator._sanitize_energy(
-            "total_energy_raw", 65800, {"status": 1, "max_power_raw": 73},
-        )
-        assert result == 65800  # accepted - documents the residual gap for a genuinely new install
+    def test_without_a_persisted_baseline_the_same_value_would_be_accepted(self):
+        """Documents the residual gap for a genuinely new install: nothing
+        to restore, so only the absolute ceiling applies."""
+        tracker, _m, _w = tracker_at(mono=5000.0, wall=1_790_000_000.0)
+        tracker.restore({})
+        assert feed(tracker, "total_energy_raw", 65800) == 65800
 
 
 class TestMalformedStorageDiscardedSafely:
-    async def test_non_dict_entry_is_discarded(self, hass):
-        store = FakeStore({"total_energy_raw": "not-a-dict"})
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
-        assert "total_energy_raw" not in coordinator._last_energy
+    @staticmethod
+    async def _load(hass, hass_storage, stored) -> dict:
+        hass_storage[energy_key(ENTRY)] = {
+            "version": 1, "minor_version": 1, "key": energy_key(ENTRY), "data": stored,
+        }
+        return (await ChargerStorage(hass, ENTRY).async_load()).energy
 
-    async def test_negative_raw_is_discarded(self, hass):
-        store = FakeStore({"total_energy_raw": {"raw": -5, "wall_ts": time.time()}})
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
-        assert "total_energy_raw" not in coordinator._last_energy
+    async def test_non_dict_entry_is_discarded(self, hass, hass_storage):
+        energy = await self._load(hass, hass_storage, {"total_energy_raw": "not-a-dict"})
+        assert "total_energy_raw" not in energy
 
-    async def test_non_numeric_wall_ts_is_discarded(self, hass):
-        store = FakeStore({"total_energy_raw": {"raw": 100, "wall_ts": "yesterday"}})
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
-        assert "total_energy_raw" not in coordinator._last_energy
+    async def test_negative_raw_is_discarded(self, hass, hass_storage):
+        energy = await self._load(hass, hass_storage,
+                                  {"total_energy_raw": {"raw": -5, "wall_ts": 1_790_000_000.0}})
+        assert "total_energy_raw" not in energy
 
-    async def test_boolean_raw_is_rejected_despite_bool_being_an_int_subclass(self, hass):
-        store = FakeStore({"total_energy_raw": {"raw": True, "wall_ts": time.time()}})
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
-        assert "total_energy_raw" not in coordinator._last_energy
+    async def test_non_numeric_wall_ts_is_discarded(self, hass, hass_storage):
+        energy = await self._load(hass, hass_storage,
+                                  {"total_energy_raw": {"raw": 100, "wall_ts": "yesterday"}})
+        assert "total_energy_raw" not in energy
 
-    async def test_one_bad_key_does_not_discard_a_good_sibling_key(self, hass):
-        store = FakeStore({
-            "total_energy_raw": {"raw": -5, "wall_ts": time.time()},
-            "current_energy_raw": {"raw": 100, "wall_ts": time.time()},
+    async def test_boolean_raw_is_rejected_despite_bool_being_an_int_subclass(self, hass, hass_storage):
+        energy = await self._load(hass, hass_storage,
+                                  {"total_energy_raw": {"raw": True, "wall_ts": 1_790_000_000.0}})
+        assert "total_energy_raw" not in energy
+
+    async def test_one_bad_key_does_not_discard_a_good_sibling_key(self, hass, hass_storage):
+        energy = await self._load(hass, hass_storage, {
+            "total_energy_raw": {"raw": -5, "wall_ts": 1_790_000_000.0},
+            "current_energy_raw": {"raw": 100, "wall_ts": 1_790_000_000.0},
         })
-        coordinator = make_coordinator(hass, energy_store=store)
-        await coordinator.async_load_energy_state()
-        assert "total_energy_raw" not in coordinator._last_energy
-        assert "current_energy_raw" in coordinator._last_energy
+        assert "total_energy_raw" not in energy
+        assert energy["current_energy_raw"] == {"raw": 100, "wall_ts": 1_790_000_000.0}
 
 
 class TestDebouncedDirtyFlagSaving:
-    async def test_unchanged_repeated_readings_do_not_mark_dirty(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass, energy_store=FakeStore(None))
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._sanitize_energy("total_energy_raw", 1000, {"status": 3, "max_power_raw": 73})
-        coordinator._energy_state_dirty = False  # reset after the first (always-dirty) read
-        mono_ts[0] = 13.0
-        coordinator._sanitize_energy("total_energy_raw", 1000, {"status": 3, "max_power_raw": 73})  # unchanged
-        assert coordinator._energy_state_dirty is False
+    def test_unchanged_repeated_readings_do_not_mark_dirty(self):
+        tracker, mono, _w = tracker_at(mono=0.0, wall=0.0)
+        assert feed(tracker, "total_energy_raw", 1000) == 1000
+        tracker.dirty = False                     # as after the first save
+        mono.t = 13.0
+        assert feed(tracker, "total_energy_raw", 1000) == 1000
+        assert tracker.dirty is False
 
-    async def test_a_changed_value_marks_dirty(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass, energy_store=FakeStore(None))
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._sanitize_energy("total_energy_raw", 1000, {"status": 3, "max_power_raw": 73})
-        coordinator._energy_state_dirty = False
-        mono_ts[0] = 13.0
-        coordinator._sanitize_energy("total_energy_raw", 1001, {"status": 3, "max_power_raw": 73})
-        assert coordinator._energy_state_dirty is True
+    def test_a_changed_value_marks_dirty(self):
+        tracker, mono, _w = tracker_at(mono=0.0, wall=0.0)
+        assert feed(tracker, "total_energy_raw", 1000) == 1000
+        tracker.dirty = False
+        mono.t = 13.0
+        assert feed(tracker, "total_energy_raw", 1001) == 1001
+        assert tracker.dirty is True
 
 
 class TestSessionBoundaryAndUnloadFlushPromptly:
-    async def test_session_boundary_marks_dirty_even_if_value_unchanged(self, hass, monkeypatch):
-        coordinator = make_coordinator(hass, energy_store=FakeStore(None))
-        mono_ts = [0.0]
-        monkeypatch.setattr(
-            "custom_components.foxess_charger.time.monotonic", lambda: mono_ts[0],
-        )
-        coordinator._prev_status = 1  # inactive
-        coordinator._energy_state_dirty = False
-        coordinator._sanitize_energy(
-            "current_energy_raw", 0, {"status": 3, "max_power_raw": 73},  # status transitioning to active
-        )
-        assert coordinator._energy_state_dirty is True
+    def test_session_boundary_marks_dirty_even_if_value_unchanged(self):
+        tracker, mono, _w = tracker_at(mono=0.0, wall=0.0)
+        data = {"current_energy_raw": 0, "max_power_raw": 73}
+        tracker.apply(data, session_boundary=False)
+        tracker.dirty = False
+        mono.t = 13.0
+        data = {"current_energy_raw": 0, "max_power_raw": 73}
+        tracker.apply(data, session_boundary=True)   # inactive -> active
+        assert data["current_energy_raw"] == 0
+        assert tracker.dirty is True
 
-    async def test_unload_flushes_unconditionally(self, hass, monkeypatch):
-        store = FakeStore(None)
-        client = MagicMock()
-        client.disconnect = MagicMock()
-        coordinator = FoxESSChargerCoordinator(hass, client, scan_interval=10, energy_store=store)
-        coordinator._last_energy["total_energy_raw"] = (12345, time.monotonic())
-        coordinator._heartbeat_task = None
+    async def test_unload_flushes_unconditionally(
+        self, hass, hass_storage, enable_custom_integrations, monkeypatch,
+    ):
+        fake = FakeController(status=3)
+        fake.hw["total_energy_raw"] = 12344
+        h = Harness(hass, make_entry(ENTRY), fake)
+        assert await h.async_setup()
+        coordinator = hass.data[DOMAIN][ENTRY]["coordinator"]
 
-        hass.data.setdefault(DOMAIN, {})["fake-entry"] = {"coordinator": coordinator, "client": client}
-        entry = MagicMock()
-        entry.entry_id = "fake-entry"
+        real_save = Store.async_save
 
-        async def fake_unload_platforms(entry, platforms):
-            return True
-        monkeypatch.setattr(hass.config_entries, "async_unload_platforms", fake_unload_platforms)
+        async def _failing(self, data):
+            raise OSError("disk busy")
 
-        await async_unload_entry(hass, entry)
-
-        assert store.saved, "energy state was never persisted on unload"
-        assert store.saved[-1]["total_energy_raw"]["raw"] == 12345
+        # The per-poll save of the new baseline fails, leaving it unsaved...
+        monkeypatch.setattr(Store, "async_save", _failing)
+        fake.hw["total_energy_raw"] = 12345
+        await coordinator.async_refresh()
+        assert hass_storage[energy_key(ENTRY)]["data"]["total_energy_raw"]["raw"] == 12344
+        # ...and unload must persist it regardless.
+        monkeypatch.setattr(Store, "async_save", real_save)
+        await h.async_unload()
+        assert h.entry.state is ConfigEntryState.NOT_LOADED
+        assert hass_storage[energy_key(ENTRY)]["data"]["total_energy_raw"]["raw"] == 12345

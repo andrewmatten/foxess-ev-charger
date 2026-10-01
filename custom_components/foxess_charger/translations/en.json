@@ -1,0 +1,254 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fox ESS EV Charger Setup",
+        "description": "Configure your Fox ESS EV Charger connection",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "slave_id": "Modbus Slave ID",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the charger. Please check the IP address and port.",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fox ESS Charger Options",
+        "data": {
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "scan_interval_too_low": "Scan interval must be at least 5 seconds.",
+      "scan_interval_too_high": "Scan interval must be 300 seconds or less."
+    }
+  },
+  "issues": {
+    "wrong_work_mode": {
+      "title": "Charger Work Mode must be Plug&Charge",
+      "description": "The charger's Work Mode is set to {mode}. This integration only works with Plug&Charge: in any other mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge (Work Mode select on the charger device)."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "software_version": {
+        "name": "Software Version"
+      },
+      "device_address": {
+        "name": "Device Address"
+      },
+      "id_serial_number": {
+        "name": "Serial Number"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "connected": "Connected",
+          "start": "Starting",
+          "charging": "Charging",
+          "paused": "Paused",
+          "finished": "Finished",
+          "fault": "Fault",
+          "reserved": "Reserved",
+          "locked": "Locked",
+          "phase_switching": "Phase switching",
+          "unknown": "Unrecognized"
+        }
+      },
+      "cp_status": {
+        "name": "CP Status",
+        "state": {
+          "fault": "Fault",
+          "12v_disconnected": "12V (Disconnected)",
+          "9v_connected": "9V (Connected)",
+          "6v_ready": "6V (Ready)",
+          "unknown": "Unrecognized"
+        }
+      },
+      "cc_status": {
+        "name": "CC Status",
+        "state": {
+          "disconnected": "Disconnected",
+          "connected": "Connected",
+          "unknown": "Unrecognized"
+        }
+      },
+      "lock_status": {
+        "name": "Lock Status",
+        "state": {
+          "unlocked": "Unlocked",
+          "locked": "Locked",
+          "unknown": "Unrecognized"
+        }
+      },
+      "work_mode": {
+        "name": "Work Mode",
+        "state": {
+          "controlled": "Controlled",
+          "plug_and_charge": "Plug & Charge",
+          "locked": "Locked",
+          "unknown": "Unrecognized"
+        }
+      },
+      "phase_sequence": {
+        "name": "Phase Sequence",
+        "state": {
+          "three_phase": "Three Phase",
+          "l2_single_phase": "L2 (Single Phase)",
+          "l3_single_phase": "L3 (Single Phase)",
+          "unknown": "Unrecognized"
+        }
+      },
+      "stop_reason": {
+        "name": "Stop Reason"
+      },
+      "port_temperature": {
+        "name": "Port Temperature"
+      },
+      "ambient_temperature": {
+        "name": "Internal Temperature"
+      },
+      "l1_voltage": {
+        "name": "L1 Voltage"
+      },
+      "l2_voltage": {
+        "name": "L2 Voltage"
+      },
+      "l3_voltage": {
+        "name": "L3 Voltage"
+      },
+      "l1_current": {
+        "name": "L1 Current"
+      },
+      "l2_current": {
+        "name": "L2 Current"
+      },
+      "l3_current": {
+        "name": "L3 Current"
+      },
+      "charging_power": {
+        "name": "Charging Power"
+      },
+      "max_supported_power": {
+        "name": "Max Supported Power"
+      },
+      "min_supported_power": {
+        "name": "Min Supported Power"
+      },
+      "max_supported_current": {
+        "name": "Max Supported Current"
+      },
+      "min_supported_current": {
+        "name": "Min Supported Current"
+      },
+      "current_session_energy": {
+        "name": "Current Session Energy"
+      },
+      "total_energy": {
+        "name": "Total Energy"
+      },
+      "alarm_code": {
+        "name": "Alarm Code"
+      },
+      "fault_code": {
+        "name": "Fault Code"
+      },
+      "rfid_card": {
+        "name": "RFID Card"
+      },
+      "last_session_energy": {
+        "name": "Last Session Energy"
+      },
+      "last_session_duration": {
+        "name": "Last Session Duration"
+      },
+      "transport_errors": {
+        "name": "Transport Errors"
+      }
+    },
+    "binary_sensor": {
+      "is_charging": {
+        "name": "Charging"
+      },
+      "vehicle_connected": {
+        "name": "Vehicle Connected"
+      },
+      "has_fault": {
+        "name": "Fault"
+      },
+      "has_alarm": {
+        "name": "Alarm"
+      },
+      "is_locked": {
+        "name": "Locked"
+      },
+      "auto_phase_switch": {
+        "name": "Auto Phase Switch"
+      }
+    },
+    "number": {
+      "max_charging_current": {
+        "name": "Max Charging Current"
+      },
+      "max_charging_power": {
+        "name": "Max Charging Power"
+      },
+      "allowed_charge_time": {
+        "name": "Allowed Charge Time"
+      },
+      "allowed_charge_energy": {
+        "name": "Allowed Charge Energy"
+      },
+      "time_validity": {
+        "name": "Command Time Validity"
+      },
+      "default_current": {
+        "name": "Default Current (Fallback)"
+      },
+      "min_switch_interval": {
+        "name": "Min Phase Switch Interval"
+      }
+    },
+    "select": {
+      "work_mode_control": {
+        "name": "Work Mode",
+        "state": {
+          "controlled": "Controlled",
+          "plug_and_charge": "Plug & Charge",
+          "locked": "Locked"
+        }
+      },
+      "phase_switching_control": {
+        "name": "Phase Sequence",
+        "state": {
+          "three_phase": "Three Phase",
+          "l2_single_phase": "L2 (Single Phase)",
+          "l3_single_phase": "L3 (Single Phase)"
+        }
+      }
+    },
+    "switch": {
+      "charging": {
+        "name": "Charging"
+      },
+      "lock": {
+        "name": "Lock"
+      },
+      "auto_phase_switch": {
+        "name": "Auto Phase Switch"
+      }
+    }
+  }
+}

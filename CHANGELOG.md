@@ -1,5 +1,99 @@
 # Changelog
 
+## 3.0.0 - 2026-10-01
+
+Rebuild of the charging logic around a single controller. **Breaking
+requirement: the charger's Work Mode must be Plug&Charge**, because the
+integration no longer sends the 0x4001 Start command.
+
+- **Single controller** - one revisioned controller (`ChargingController`) is
+  the only writer to the charger. The coordinator is now a thin polling
+  layer over it and every entity/service write goes through it. Commands
+  overtaken by newer intent report "superseded" instead of silently racing.
+- **Zero-power pause/resume** - charging is paused by writing zero power and
+  resumed by writing positive power. 0x4001 Start is never sent; 0x4001
+  Stop is sent only as a fallback when a zero setpoint fails to stop a session. Pause
+  and resume are confirmed from fresh reads (zero setpoint, low measured
+  power, compatible status) before being reported as done. A failed session
+  start revokes the enable and confirms zero; a hard fault latches zero
+  until an explicit enable; unplugging releases an ordinary user pause.
+- **Staging while off** - while the charger is off or paused, changes to
+  power/current limits are stored and shown but staged, never written to the
+  charger, so they can never resume charging. Staged changes are not claimed
+  as hardware success.
+- **Safer enable** - only an enable can authorise charging (set_power and
+  set_current never do); an enable needs a fresh valid read with an observed
+  active session, and an unreadable fault code or current read-back counts as
+  unconfirmed. A session stuck in status 2 is revoked by a watchdog. First
+  install adopts the charger's live cap and never raises it. The safety
+  configuration (Command Time Validity 60 s, fallback current) is applied with
+  fresh read-back.
+- **Storage compatibility** - controller state is stored in a versioned
+  store; 2.4.3 stores are imported on first start and the old keys are still
+  projected so a downgrade to 2.4.3 keeps its settings. An unsaved pause is
+  reported and retried, and is not undone by a restore.
+- **Register confirmation** - each register written in an operation gets its
+  own confirmation window, rather than sharing one.
+- **Telemetry** - status 9 has its own sensor state; the fault code is read in
+  the same frame as status; leaving a telemetry-uncertain state needs two
+  consistent valid frames; diagnostics now include transport and controller
+  counters (including `stale_replies`).
+- **Layout** - the integration now lives in `custom_components/foxess_charger/`
+  (standard HACS layout). Manual installs must copy that folder.
+- **Work Mode warning** - an enable that times out now says so when the
+  charger's last known Work Mode is Controlled or Locked and tells you to set
+  Plug&Charge. A Repairs warning is raised while the polled Work Mode is
+  Controlled or Locked (its text follows the actual mode) and cleared when it
+  becomes Plug&Charge or the entry is unloaded. A failed config-block read
+  neither raises nor clears it.
+- **Tests** - new simulator-based and black-box controller suites, an
+  end-to-end HA suite, and replays of earlier incidents against the actual
+  historical code.
+
+**Modbus timeout/reconnect fix.** The charger sometimes takes more
+than 2 s to answer a Modbus TCP request. Every setup retry logged a timeout
+followed immediately by a Transaction ID mismatch and another reset -
+`modbus_client`'s connection error: timed out - resetting connection, then
+Transaction ID mismatch (sent 0007, got 0006) - resetting connection.
+
+- **Root cause** - `transport.DEFAULT_DEADLINE` was 2.0 s (the sync client's
+  own default was already 5.0 s, but the async transport used its own,
+  shorter value). A request that timed out at 2 s left its late reply still
+  in flight; that reply then arrived during the *next* transaction, was read
+  as that transaction's answer, failed the Transaction ID check, and reset
+  the connection - which cost the *next* request its own reply the same way,
+  repeating indefinitely once replies were consistently a little slow.
+- **Fix** - `transport.DEFAULT_DEADLINE` raised to 5.0 s, matching the sync
+  client's own default. `FoxESSModbusClient` now tells a late reply to an
+  abandoned request apart from a genuinely malformed one: a reply whose
+  Transaction ID is older than the one just sent is discarded (its declared
+  length still read off the wire, so framing stays aligned) and reading
+  continues, within the same deadline, for the reply that actually matches.
+  Discards are counted in the new `stale_replies` counter (transport
+  counters / diagnostics). The connection is reset only for a malformed
+  frame, a wrong Unit ID, or a Transaction ID that cannot be explained as a
+  late reply - not for a deadline that elapses with nothing received yet,
+  which now leaves the connection open instead of forcing every subsequent
+  request through a reconnect.
+- **Controller headroom** - `_configure_safety` and the per-write section of
+  `_apply_locked` no longer split one `confirmation_timeout` window between
+  the two registers a single operation can write; each gets its own fresh
+  window. At the old 2 s transaction deadline this rarely mattered; at 5 s,
+  two registers could together need up to 20 s, twice the shared 10 s budget
+  that used to cover both. `confirmation_timeout` itself is unchanged (still
+  10.0 s, per CONTRACTS.md).
+- Checked the refresh/telemetry-grace invariant this relies on
+  (`telemetry_grace` + `refresh_interval` < `FIRMWARE_EXPIRY_S`, i.e.
+  20 + 30 = 50 < 60 s): a 5 s transaction deadline does not break it. The one
+  compound edge case - a periodic safety reconfiguration landing in the same
+  refresh cycle as ordinary cap writes, with every single transaction in
+  that cycle hitting the full deadline - stretches that one cycle to at most
+  ~50 s, still under the 60 s firmware expiry but with less margin than
+  before; considered acceptable without further changes.
+- `tests/rebuild_simulator.py`'s `SimCharger` gained an optional
+  `reply_latency` (virtual seconds per request) for controller-level tests
+  of a slow-but-working charger.
+
 ## 2.4.3
 
 Fixes from the 2026-09-25 audit of the charger's power-limit behaviour. New

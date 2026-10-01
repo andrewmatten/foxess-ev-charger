@@ -66,7 +66,7 @@ class TestDecodeBitmask:
 
 
 class TestTransportErrorsStateClass:
-    """2026-09 (second audit): transport_errors' underlying counters are
+    """transport_errors' underlying counters are
     plain in-memory attributes on FoxESSModbusClient, which is recreated
     from scratch on every integration reload - so the value legitimately
     drops back to zero, not just increases. TOTAL_INCREASING would have HA's
@@ -132,7 +132,7 @@ class TestPlausibilityBounds:
 
 
 class TestDynamicPowerBoundsForThreePhaseModels:
-    """2026-09 (second audit): charging_power/max_supported_power/
+    """charging_power/max_supported_power/
     min_supported_power's plausibility ceiling used to be a hardcoded 10kW
     (right for the single-phase A7300, wrong for the three-phase A011/A022
     models const.py already has capability entries for) - now derived from

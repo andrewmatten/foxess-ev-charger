@@ -81,7 +81,7 @@ async def test_get_triggers_omits_types_for_missing_entities(hass):
 
 
 async def test_get_triggers_omits_disabled_entities(hass):
-    """2026-09 (second audit): a disabled entity is never written to the
+    """a disabled entity is never written to the
     state machine, so a state trigger attached to it would silently never
     fire - it must not even be offered."""
     from homeassistant.helpers import entity_registry as er
@@ -188,7 +188,7 @@ class TestAttachTrigger:
 
 
 class TestSessionCompletedTrigger:
-    """2026-09 (second audit): session_completed is keyed off
+    """session_completed is keyed off
     EVENT_SESSION_COMPLETED (an internal event fired by
     FoxESSChargerCoordinator._track_session, see __init__.py/const.py) - not
     a state trigger at all. See device_trigger.py's module docstring for why

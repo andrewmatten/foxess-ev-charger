@@ -1,7 +1,7 @@
 """Tests for the adaptive setpoint re-assertion interval.
 
-Adopted 2026-09 from a third-party PR (github.com/loadrunner42) after
-comparing it against our own previously-fixed 30s interval: a fixed number
+Adopted from a third-party contribution after
+comparing it against a previously-fixed 30s interval: a fixed number
 is only safe if it's always comfortably below whatever the charger's own
 Command Time Validity (0x3005) is actually configured to, and that register's
 documented valid range (10-60s) means a fixed 30s floor had no margin left
@@ -44,7 +44,7 @@ def test_missing_time_validity_uses_the_documented_default():
 
 
 def test_real_deployed_value_matches_expectation():
-    """Andrew's charger reports time_validity=180s, but the firmware reverts
-    after ~60s (2026-09-24 sawtooth) - the old expectation of 90s here was
+    """A real charger reports time_validity=180s, but the firmware reverts
+    after ~60s (observed sawtooth) - the old expectation of 90s here was
     the bug. The value must be capped to the 60s firmware window -> 30s."""
     assert get_heartbeat_interval(180) == 30

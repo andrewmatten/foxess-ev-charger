@@ -1,229 +1,195 @@
-"""Tests for the P0 fix: desired_setpoints (the current/power limits the
-integration re-asserts once charging starts, since the charger resets
-0x3001/0x3002 to its maximum at every session boundary) surviving a HA
-restart.
+"""Saved charging limits (and the legacy stop intent) surviving a restart.
 
-Before this fix, desired_setpoints was in-memory only - a restart forgot
-any user-set limit, and the heartbeat/poll-driven re-assertion would then
-have nothing to re-apply once the charger reset those registers to its own
-maximum at the next session boundary. Same failure mode desired_setpoints
-exists to prevent in the first place, just deferred to "after the next
-restart" instead of "after the next session".
+Ported from the 2.4.3 coordinator tests (``desired_setpoints`` Store) to the
+rebuild: ChargerStorage imports the legacy ``_setpoints``/``_session`` files
+into the controller's saved state and keeps writing them in the 2.4.3 shape;
+the number entities stage/persist through the controller.
 
-Mirrors tests/test_session_persistence.py's approach: the Store is mocked
-(AsyncMock) rather than hitting real disk - these tests are about the
-coordinator's own save/restore/validate logic, not HA core's Store
-implementation.
+Deliberate change (SPEC.md 6.1): an out-of-range restored limit is dropped
+and restoration becomes a protective pause; it is never replaced by the
+device's default current (or its maximum).
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+from homeassistant.helpers.storage import Store
 
-from custom_components.foxess_charger import FoxESSChargerCoordinator
 from custom_components.foxess_charger.const import (
-    REG_MAX_CHARGING_CURRENT,
-    REG_MAX_CHARGING_POWER,
+    DOMAIN, REG_MAX_CHARGING_CURRENT, REG_MAX_CHARGING_POWER,
 )
-from custom_components.foxess_charger.number import NUMBERS, FoxESSNumber
+from custom_components.foxess_charger.controller import ChargingController
+from custom_components.foxess_charger.persistence import (
+    ChargerStorage, session_key, setpoints_key, state_key,
+)
+
+from fake_controller import FakeController
+from ha_harness import Harness, make_entry
+from rebuild_simulator import CONNECTED, SimCharger
+
+ENTRY = "setpointentry01"
+CUR, POW = str(REG_MAX_CHARGING_CURRENT), str(REG_MAX_CHARGING_POWER)
 
 
-def make_setpoints_store(loaded: dict | None = None) -> MagicMock:
-    store = MagicMock()
-    store.async_load = AsyncMock(return_value=loaded)
-    store.async_save = AsyncMock()
-    return store
+def put(hass_storage, key, data) -> None:
+    hass_storage[key] = {"version": 1, "minor_version": 1, "key": key, "data": data}
+
+
+def legacy_session(**overrides) -> dict:
+    base = {"session_start_wall": None, "session_start_total": None, "last_session": None,
+            "prev_status": 1, "stop_inhibit": False, "stop_pending": False}
+    base.update(overrides)
+    return base
+
+
+async def load(hass, hass_storage, setpoints=None, session=None):
+    if session is not None:
+        put(hass_storage, session_key(ENTRY), session)
+    if setpoints is not None:
+        put(hass_storage, setpoints_key(ENTRY), setpoints)
+    return await ChargerStorage(hass, ENTRY).async_load()
 
 
 class TestRestoringAfterRestart:
-    async def test_restores_desired_setpoints_from_store(self, hass):
-        store = make_setpoints_store({
-            "desired_setpoints": {
-                str(REG_MAX_CHARGING_CURRENT): 160,
-                str(REG_MAX_CHARGING_POWER): 50,
-            },
-        })
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
+    async def test_restores_desired_setpoints_from_store(self, hass, hass_storage):
+        # JSON round-trips register keys as strings; restored values are ints.
+        result = await load(hass, hass_storage, {"desired_setpoints": {CUR: 160, POW: 50}},
+                            legacy_session())
+        assert result.controller["current_raw"] == 160
+        assert result.controller["power_raw"] == 50
+        assert type(result.controller["current_raw"]) is int
+        assert type(result.controller["power_raw"]) is int
 
-        await coordinator.async_load_desired_setpoints()
+    async def test_no_stored_state_is_a_safe_no_op(self, hass, hass_storage):
+        result = await load(hass, hass_storage)
+        assert result.controller is None       # first install: nothing restored
+        assert result.issues == []
 
-        # Restored keys must be real ints (JSON round-trips them as
-        # strings), matching how every other write site keys this dict.
-        assert coordinator.desired_setpoints == {
-            REG_MAX_CHARGING_CURRENT: 160,
-            REG_MAX_CHARGING_POWER: 50,
-        }
-        assert all(isinstance(k, int) for k in coordinator.desired_setpoints)
-
-    async def test_no_stored_state_is_a_safe_no_op(self, hass):
-        store = make_setpoints_store(loaded=None)
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-
-        await coordinator.async_load_desired_setpoints()
-
-        assert coordinator.desired_setpoints == {}
-
-    async def test_no_store_configured_is_a_safe_no_op(self, hass):
-        """setpoints_store=None (the default) - most existing tests
-        construct the coordinator this way - persistence is simply
-        skipped."""
-        coordinator = FoxESSChargerCoordinator(hass, MagicMock(), scan_interval=10)
-
-        await coordinator.async_load_desired_setpoints()  # must not raise
-        await coordinator._async_persist_desired_setpoints()  # must not raise
-        await coordinator.async_validate_desired_setpoints()  # must not raise
-
-        assert coordinator.desired_setpoints == {}
+    async def test_no_store_configured_is_a_safe_no_op(self):
+        """A controller without a persist callback still stages limits."""
+        sim = SimCharger(state=CONNECTED)
+        ctl = ChargingController(sim, persist=None)
+        await ctl.async_initialize(None, configure_safety=False)
+        assert (await ctl.async_set_current(160)).outcome == "staged"
+        assert ctl.desired_current_raw == 160
+        await ctl.async_close()
 
 
 class TestPersistingOnWrite:
-    async def test_dirty_flag_triggers_a_save_on_the_next_update_cycle(self, hass):
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.desired_setpoints = {REG_MAX_CHARGING_CURRENT: 160}
-        coordinator._setpoints_dirty = True
+    async def test_dirty_flag_triggers_a_save_on_the_next_update_cycle(
+        self, hass, hass_storage, enable_custom_integrations,
+    ):
+        """A user limit is written to the legacy setpoints file (2.4.3
+        shape) as part of the command, before any charger write."""
+        h = Harness(hass, make_entry(ENTRY), FakeController(status=1))
+        assert await h.async_setup()
+        try:
+            await hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": "number.foxess_charger_max_charging_current", "value": 16.0},
+                blocking=True,
+            )
+            assert hass_storage[setpoints_key(ENTRY)]["data"] == {
+                "desired_setpoints": {CUR: 160},
+            }
+            assert hass_storage[state_key(ENTRY)]["data"]["controller"]["current_raw"] == 160
+        finally:
+            await h.async_unload()
 
-        # _async_update_data() persists the coordinator's own desired_
-        # setpoints dict when it's marked dirty; the actual _fetch() result
-        # (which needs a working client) isn't the point of this test, so
-        # stub it out directly rather than wiring up a full mock client.
-        coordinator._fetch = MagicMock(return_value={})
+    async def test_not_dirty_does_not_trigger_a_save(self, hass, hass_storage, monkeypatch):
+        saves: list[str] = []
+        real = Store.async_save
 
-        await coordinator._async_update_data()
+        async def _counting(self, data):
+            saves.append(self.key)
+            await real(self, data)
 
-        store.async_save.assert_called_once_with(
-            {"desired_setpoints": {str(REG_MAX_CHARGING_CURRENT): 160}}
-        )
-        assert coordinator._setpoints_dirty is False
-
-    async def test_not_dirty_does_not_trigger_a_save(self, hass):
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator._fetch = MagicMock(return_value={})
-
-        await coordinator._async_update_data()
-
-        store.async_save.assert_not_called()
-
-
-def make_entry() -> MagicMock:
-    entry = MagicMock()
-    entry.entry_id = "test_entry"
-    return entry
+        monkeypatch.setattr(Store, "async_save", _counting)
+        storage = ChargerStorage(hass, ENTRY)
+        await storage.async_load()
+        state = {"schema": 1, "enabled": True, "power_raw": 22, "current_raw": 100,
+                 "revision": 1, "safety_latched": False, "stop_fallback": False}
+        await storage.async_save_controller(state)
+        first = list(saves)
+        assert first                                   # something was written
+        await storage.async_save_controller(dict(state))
+        assert saves == first                          # unchanged: nothing rewritten
 
 
 class TestNumberEntityMarksDirty:
-    async def test_setting_a_reasserted_register_marks_setpoints_dirty(self, hass):
-        client = MagicMock()
-        client.write_holding_register.return_value = True
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, client, scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"max_charging_current_raw": 100}
-        coordinator.async_request_refresh = AsyncMock()
-
-        desc = next(d for d in NUMBERS if d.key == "max_charging_current")
-        entity = FoxESSNumber(coordinator, client, desc, make_entry())
-        entity.hass = hass
-        entity.async_write_ha_state = MagicMock()
-
-        assert coordinator._setpoints_dirty is False
-
-        with patch("custom_components.foxess_charger.number.asyncio.sleep", AsyncMock()):
-            await entity.async_set_native_value(16.0)  # raw=160
-
-        assert coordinator._setpoints_dirty is False
-        assert coordinator.desired_setpoints[REG_MAX_CHARGING_CURRENT] == 160
-        store.async_save.assert_awaited_once_with(
-            {"desired_setpoints": {str(REG_MAX_CHARGING_CURRENT): 160}}
-        )
+    async def test_setting_a_reasserted_register_marks_setpoints_dirty(
+        self, hass, hass_storage, enable_custom_integrations,
+    ):
+        fake = FakeController(status=3)
+        h = Harness(hass, make_entry(ENTRY), fake)
+        assert await h.async_setup()
+        try:
+            await hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": "number.foxess_charger_max_charging_current", "value": 16.0},
+                blocking=True,
+            )
+            assert ("set_current", 160) in fake.calls
+            assert hass.data[DOMAIN][ENTRY]["controller"].desired_current_raw == 160
+            assert hass_storage[setpoints_key(ENTRY)]["data"]["desired_setpoints"][CUR] == 160
+        finally:
+            await h.async_unload()
 
 
 class TestValidatingAgainstDetectedCapabilities:
-    """A value restored from storage may be stale relative to *this
-    specific* charger (e.g. saved against a different/lower-capability
-    unit) - it must be bounds-checked against the currently detected
-    model's capabilities before being trusted, not just accepted because it
-    round-tripped through the Store correctly."""
+    async def test_in_range_restored_value_is_left_alone(self, hass, hass_storage):
+        result = await load(hass, hass_storage, {"desired_setpoints": {CUR: 160}}, legacy_session(prev_status=3))
+        assert result.controller["current_raw"] == 160
+        assert result.controller["enabled"] is True
+        assert result.issues == []
 
-    async def test_in_range_restored_value_is_left_alone(self, hass):
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"id_model_code": "A7300P1-E-B-WO", "default_current_raw": 100}
-        coordinator.desired_setpoints = {REG_MAX_CHARGING_CURRENT: 160}  # 16A, in 6-32A range
+    async def test_out_of_range_current_falls_back_to_device_default_not_maximum(
+        self, hass, hass_storage,
+    ):
+        # SPEC.md 6.1: dropped and protective, never the maximum (nor a guess).
+        result = await load(hass, hass_storage, {"desired_setpoints": {CUR: 500}}, legacy_session())
+        assert result.controller["current_raw"] is None
+        assert result.controller["enabled"] is False
+        assert "legacy_setpoints_malformed" in result.issues
 
-        await coordinator.async_validate_desired_setpoints()
+    async def test_out_of_range_power_with_no_safe_default_is_discarded(self, hass, hass_storage):
+        result = await load(hass, hass_storage, {"desired_setpoints": {POW: 999}}, legacy_session())
+        assert result.controller["power_raw"] is None
+        assert result.controller["enabled"] is False
+        assert "legacy_setpoints_malformed" in result.issues
 
-        assert coordinator.desired_setpoints == {REG_MAX_CHARGING_CURRENT: 160}
-        store.async_save.assert_not_called()
+    async def test_out_of_range_current_with_no_default_available_is_discarded(
+        self, hass, hass_storage,
+    ):
+        result = await load(hass, hass_storage, {"desired_setpoints": {CUR: 500, POW: 30}},
+                            legacy_session())
+        assert result.controller["current_raw"] is None
+        assert result.controller["power_raw"] == 30   # the valid sibling survives
+        assert result.controller["enabled"] is False
 
-    async def test_out_of_range_current_falls_back_to_device_default_not_maximum(self, hass):
-        """A7300 max current is 32A (raw 320) - 500 (50A) is out of range
-        for this detected model. Must fall back to the charger's own
-        tracked default (REG_DEFAULT_CURRENT/default_current_raw), never to
-        the model's maximum - that's the exact "silently starts at full
-        output" failure mode this whole feature exists to prevent."""
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"id_model_code": "A7300P1-E-B-WO", "default_current_raw": 100}
-        coordinator.desired_setpoints = {REG_MAX_CHARGING_CURRENT: 500}
+    async def test_no_desired_setpoints_is_a_no_op(self, hass, hass_storage):
+        result = await load(hass, hass_storage, {"desired_setpoints": {}}, legacy_session(prev_status=3))
+        assert result.controller["power_raw"] is None
+        assert result.controller["current_raw"] is None
+        assert result.controller["enabled"] is True
+        assert result.issues == []
 
-        await coordinator.async_validate_desired_setpoints()
 
-        assert coordinator.desired_setpoints[REG_MAX_CHARGING_CURRENT] == 100
-        store.async_save.assert_called_once()
+# ported from test_realistic_charger::test_malformed_restored_setpoint_is_dropped
+@pytest.mark.parametrize("bad", ["73", None, 7.3, True, [73]])
+async def test_malformed_restored_setpoint_is_dropped(hass, hass_storage, bad):
+    result = await load(hass, hass_storage, {"desired_setpoints": {POW: bad}}, legacy_session())
+    assert result.controller["power_raw"] is None
+    if bad is not None:
+        # SPEC.md 6.1: malformed restoration is protective, not ignored.
+        assert result.controller["enabled"] is False
+        assert "legacy_setpoints_malformed" in result.issues
 
-    async def test_out_of_range_power_with_no_safe_default_is_discarded(self, hass):
-        """REG_MAX_CHARGING_POWER has no equivalent "default" register in
-        this protocol - an out-of-range value must be dropped rather than
-        guessed at or silently pushed through as the model's maximum."""
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"id_model_code": "A7300P1-E-B-WO", "default_current_raw": 100}
-        # A7300 max power is 7.3kW (raw 73) - 999 is nonsense for this model.
-        coordinator.desired_setpoints = {REG_MAX_CHARGING_POWER: 999}
 
-        await coordinator.async_validate_desired_setpoints()
-
-        assert REG_MAX_CHARGING_POWER not in coordinator.desired_setpoints
-        store.async_save.assert_called_once()
-
-    async def test_out_of_range_current_with_no_default_available_is_discarded(self, hass):
-        """If the charger's own default_current_raw hasn't been read yet
-        (or is itself somehow out of range), there is no safe fallback to
-        use - discard rather than write something unverified."""
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"id_model_code": "A7300P1-E-B-WO"}  # no default_current_raw yet
-        coordinator.desired_setpoints = {REG_MAX_CHARGING_CURRENT: 500}
-
-        await coordinator.async_validate_desired_setpoints()
-
-        assert REG_MAX_CHARGING_CURRENT not in coordinator.desired_setpoints
-
-    async def test_no_desired_setpoints_is_a_no_op(self, hass):
-        store = make_setpoints_store()
-        coordinator = FoxESSChargerCoordinator(
-            hass, MagicMock(), scan_interval=10, setpoints_store=store,
-        )
-        coordinator.data = {"id_model_code": "A7300P1-E-B-WO"}
-
-        await coordinator.async_validate_desired_setpoints()  # must not raise
-
-        store.async_save.assert_not_called()
+class TestLegacyStopIntent:
+    # ported from test_stop_inhibit::TestStopInhibitPersistsAcrossARestart::
+    #             test_absent_key_defaults_to_not_inhibited
+    async def test_absent_key_defaults_to_not_inhibited(self, hass, hass_storage):
+        result = await load(hass, hass_storage, session={"prev_status": 3})
+        assert result.controller["enabled"] is True
+        assert result.controller["stop_fallback"] is False
+        assert result.issues == []
