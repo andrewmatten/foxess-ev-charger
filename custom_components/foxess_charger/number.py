@@ -22,7 +22,10 @@ from .const import (
     BLOCK_CONFIG, BLOCK_PHASE_BOX,
     get_capabilities,
 )
-from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, build_device_info
+from .__init__ import (
+    FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, FoxESSLongContextMixin,
+    build_device_info,
+)
 from .adapter_api import CONFIRMED, ControlError
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,7 +138,7 @@ async def async_setup_entry(
     async_add_entities([FoxESSNumber(coordinator, desc, entry) for desc in NUMBERS])
 
 
-class FoxESSNumber(FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity):
+class FoxESSNumber(FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity):
     _attr_has_entity_name = True
     entity_description: FoxESSNumberDescription
 

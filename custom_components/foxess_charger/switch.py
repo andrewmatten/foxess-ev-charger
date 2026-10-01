@@ -14,7 +14,10 @@ from .const import (
     BLOCK_PHASE_BOX, BLOCK_STATUS, DOMAIN, REG_AUTO_PHASE_SWITCH, REG_LOCK_CONTROL,
     SESSION_ACTIVE_STATUSES,
 )
-from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, build_device_info
+from .__init__ import (
+    FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, FoxESSLongContextMixin,
+    build_device_info,
+)
 from .adapter_api import CONFIRMED, ControlError
 from .session import STATUS_PHASE_SWITCHING, valid_status
 
@@ -36,7 +39,7 @@ async def async_setup_entry(
     ])
 
 
-class _FoxESSSwitch(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity):
+class _FoxESSSwitch(FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity):
     _attr_has_entity_name = True
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry,

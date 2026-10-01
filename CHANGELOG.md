@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.1 - 2026-10-02
+
+- The logbook now shows which automation or user turned the charger on/off or changed its power.
+
 ## 3.0.0 - 2026-10-01
 
 Rebuild of the charging logic around a single controller. **Breaking

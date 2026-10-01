@@ -8,9 +8,10 @@ transport; every hardware change goes through the controller's API.
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.entity import DeviceInfo
 
@@ -53,6 +54,24 @@ def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator)
         manufacturer="FoxESS",
         model=model,
     )
+
+
+class FoxESSLongContextMixin:
+    """Keep the service-call context for 60 s instead of HA's 5 s.
+
+    These entities change state only after the charger confirms (~10-20 s),
+    so with the default window HA drops the context first and the logbook
+    cannot say which automation or user made the request. (This HA version
+    has no per-entity setting, so the window is widened via the timestamp
+    that HA compares against.)
+    """
+
+    _CONTEXT_RECENT_SECONDS = 60
+
+    @callback
+    def async_set_context(self, context) -> None:
+        super().async_set_context(context)
+        self._context_set = time.time() + (self._CONTEXT_RECENT_SECONDS - 5)
 
 
 class FoxESSBlockAvailabilityMixin:
