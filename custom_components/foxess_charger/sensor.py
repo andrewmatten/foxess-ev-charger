@@ -34,6 +34,13 @@ _LOGGER = logging.getLogger(__name__)
 STATUS_SENSOR_MAP = {**STATUS_MAP, STATUS_PHASE_SWITCHING: "phase_switching"}
 
 
+def _kwh(raw: int | None) -> float | None:
+    """Energy counter in kWh. A counter the energy guard rejected with no
+    known-good baseline is absent: unknown, never 0 (a 0 on a
+    total_increasing sensor reads as a meter reset)."""
+    return None if raw is None else round(raw * 0.1, 2)
+
+
 @dataclass(frozen=True, kw_only=True)
 class FoxESSChargerSensorDescription(SensorEntityDescription):
     value_fn: Callable[[dict], StateType] = lambda _: None
@@ -324,7 +331,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         icon="mdi:counter",
-        value_fn=lambda d: round(d.get("current_energy_raw", 0) * 0.1, 2),
+        value_fn=lambda d: _kwh(d.get("current_energy_raw")),
     ),
     FoxESSChargerSensorDescription(
         key="total_energy", name="Total Energy",
@@ -333,7 +340,7 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         icon="mdi:counter",
-        value_fn=lambda d: round(d.get("total_energy_raw", 0) * 0.1, 2),
+        value_fn=lambda d: _kwh(d.get("total_energy_raw")),
     ),
     # ── Konfigurationssensoren ────────────────────────────────────────────────
     FoxESSChargerSensorDescription(
@@ -435,12 +442,18 @@ SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
             # attention alongside a rising total above.
             "stale_replies":       d.get("diag_stale_replies", 0),
             "energy_rejections":   d.get("diag_energy_rejections", 0),
-            "setpoint_reasserts":  d.get("diag_setpoint_reasserts", 0),
-            "setpoint_drift_events": d.get("diag_setpoint_drift_events", 0),
-            "heartbeat_write_failures": d.get("diag_heartbeat_write_failures", 0),
-            "stop_pending": d.get("diag_stop_pending", False),
-            "stop_write_failures": d.get("diag_stop_write_failures", 0),
-            "stop_retries": d.get("diag_stop_retries", 0),
+            # Controller counters (3.x). The 2.4.3 names below have no
+            # producer in this controller: unknown (None), never a made-up 0.
+            "refreshes":           d.get("diag_refreshes"),
+            "refresh_failures":    d.get("diag_refresh_failures"),
+            "stop_fallbacks":      d.get("diag_stop_fallbacks"),
+            "persist_failures":    d.get("diag_persist_failures"),
+            "setpoint_reasserts":  d.get("diag_setpoint_reasserts"),
+            "setpoint_drift_events": d.get("diag_setpoint_drift_events"),
+            "heartbeat_write_failures": d.get("diag_heartbeat_write_failures"),
+            "stop_pending": d.get("diag_stop_pending"),
+            "stop_write_failures": d.get("diag_stop_write_failures"),
+            "stop_retries": d.get("diag_stop_retries"),
             # Full context on each rejected energy read, so a recorder
             # correction can be computed rather than guessed at later.
             "recent_energy_rejections": d.get("energy_rejection_log", []),

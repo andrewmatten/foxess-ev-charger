@@ -661,9 +661,10 @@ async def test_unsaved_pause_then_restart_from_old_record_does_not_resume(rigs):
 
 
 async def test_documented_boundary_unsaved_and_unconfirmed_pause_then_restart(rigs):
-    """Documented limit (C3): the pause save fails AND the
-    zero is never applied, then the whole process restarts. The pause
-    raised, so no success was ever reported; the charger never stopped.
+    """Documented limit: the pause save fails AND neither the zero
+    nor the 0x4001 Stop fallback is applied, then the whole process
+    restarts. The pause raised, so no success was ever reported; the
+    charger never stopped.
     The next process sees the older enabled record and an active session,
     so it restores that session under its old cap - never above it.
     Closing this needs an independent write-ahead medium."""
@@ -673,9 +674,10 @@ async def test_documented_boundary_unsaved_and_unconfirmed_pause_then_restart(ri
     durable = dict(rig.persisted[-1])
     rig.persist_fails = True
     rig.sim.inject_write(P, "ignored", count=None)
+    rig.sim.inject_write(CTRL, "ignored", value=2, count=None)
     with pytest.raises(ControlError):
         await rig.run(ctl.async_pause())
-    assert rig.sim.state == CHARGING             # the zero never applied
+    assert rig.sim.state == CHARGING             # neither zero nor Stop applied
     await rig.run(ctl.async_close())
     rig.sim.simulate_process_restart()
     rig.sim.clear_write_rules()

@@ -111,7 +111,8 @@ class FoxESSLockSwitch(_FoxESSSwitch):
     @property
     def is_on(self) -> bool | None:
         value = (self.coordinator.data or {}).get("lock_status")
-        return None if value is None else value != 0
+        # 0x100F: 0 unlocked, 1 locked; anything else (e.g. 65535) is unknown.
+        return value == 1 if value in (0, 1) else None
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._async_command(

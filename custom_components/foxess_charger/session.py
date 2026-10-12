@@ -56,6 +56,9 @@ class SessionTracker:
         self.start_ts: float | None = None
         self.start_wall: float | None = None
         self.start_total: int | None = None
+        # Per-session counter at the start, used only if the lifetime delta
+        # is unavailable. Not persisted: a restored session reports unknown.
+        self.start_current: int | None = None
         self.peak_power_raw = 0
         self.prev_status: int | None = None
         self.last_session: dict | None = None
@@ -157,6 +160,7 @@ class SessionTracker:
         self.start_ts = self._clock()
         self.start_wall = self._wall()
         self.start_total = data.get("total_energy_raw")
+        self.start_current = data.get("current_energy_raw")
         self.peak_power_raw = 0
         data["session_start"] = datetime.now(timezone.utc).isoformat()
         self.dirty = True
@@ -169,20 +173,27 @@ class SessionTracker:
             delta = end_total - self.start_total
             if delta >= 0:
                 energy_raw = delta
-        if energy_raw is None:
-            energy_raw = data.get("current_energy_raw") or 0
+        end_current = data.get("current_energy_raw")
+        if energy_raw is None and isinstance(self.start_current, int) \
+                and isinstance(end_current, int) and end_current >= self.start_current:
+            # No lifetime delta: fall back to the per-session counter's delta.
+            energy_raw = end_current - self.start_current
+        # Unmeasurable energy stays unknown rather than a made-up number.
+        kwh = None if energy_raw is None else round(energy_raw * 0.1, 2)
         hours = duration_s / 3600
         record = {
             "ended": datetime.now(timezone.utc).isoformat(),
             "duration_min": round(duration_s / 60, 1),
-            "energy_kwh": round(energy_raw * 0.1, 2),
-            "avg_power_kw": round((energy_raw * 0.1) / hours, 2) if hours > 0 else 0,
+            "energy_kwh": kwh,
+            "avg_power_kw": (
+                None if kwh is None else round(energy_raw * 0.1 / hours, 2) if hours > 0 else 0
+            ),
             "peak_power_kw": round(self.peak_power_raw * 0.1, 2),
             "stop_reason": STOP_REASON_MAP.get(data.get("stop_reason") or 0, "unknown"),
         }
         self.last_session = record
         data["last_session"] = record
-        self.start_ts = self.start_wall = self.start_total = None
+        self.start_ts = self.start_wall = self.start_total = self.start_current = None
         self.peak_power_raw = 0
         self.dirty = True
         if self._on_complete is not None:

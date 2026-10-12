@@ -57,6 +57,7 @@ TRANSPORT_COUNTERS = (
     "stale_replies",
 )
 CONTROL_COUNTERS = (
+    "refreshes", "refresh_failures", "stop_fallbacks", "persist_failures",
     "setpoint_reasserts", "setpoint_drift_events", "heartbeat_write_failures",
     "stop_pending", "stop_write_failures", "stop_retries",
 )

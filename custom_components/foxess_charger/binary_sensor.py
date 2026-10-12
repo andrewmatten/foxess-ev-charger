@@ -18,9 +18,22 @@ from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, bu
 
 @dataclass(frozen=True, kw_only=True)
 class FoxESSBinarySensorDescription(BinarySensorEntityDescription):
-    value_fn: Callable[[dict], bool] = lambda _: False
+    value_fn: Callable[[dict], bool | None] = lambda _: None
     # See FoxESSChargerSensorDescription.block in sensor.py - same mechanism.
     block: str | None = BLOCK_STATUS
+
+
+def _known(value, test) -> bool | None:
+    """``test(value)``, or None (unknown) when the field is missing/invalid."""
+    return None if value is None else test(value)
+
+
+def _fault(d: dict) -> bool | None:
+    """Status 6 is a fault even with clear fault bits; unknown if neither
+    the status nor the fault register says anything."""
+    if d.get("status") == 6 or (d.get("fault_code") or 0) > 0:
+        return True
+    return None if d.get("fault_code") is None else False
 
 
 BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
@@ -29,25 +42,27 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
         translation_key="is_charging",
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
         icon="mdi:battery-charging",
-        value_fn=lambda d: d.get("status") == 3,
+        # Unknown status/connector is unknown, never OFF: automations treat
+        # an OFF edge as a real stop or unplug.
+        value_fn=lambda d: _known(d.get("status"), lambda v: v == 3),
     ),
     FoxESSBinarySensorDescription(
         key="vehicle_connected", name="Vehicle Connected",
         translation_key="vehicle_connected",
         device_class=BinarySensorDeviceClass.PLUG, icon="mdi:power-plug",
-        value_fn=lambda d: d.get("cc_status") == 1,
+        value_fn=lambda d: _known(d.get("cc_status"), lambda v: v == 1),
     ),
     FoxESSBinarySensorDescription(
         key="has_fault", name="Fault",
         translation_key="has_fault",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert-circle",
-        value_fn=lambda d: (d.get("fault_code") or 0) > 0,
+        value_fn=lambda d: _fault(d),
     ),
     FoxESSBinarySensorDescription(
         key="has_alarm", name="Alarm",
         translation_key="has_alarm",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert",
-        value_fn=lambda d: (d.get("alarm_code") or 0) > 0,
+        value_fn=lambda d: _known(d.get("alarm_code"), lambda v: v > 0),
     ),
     FoxESSBinarySensorDescription(
         key="is_locked", name="Locked",
@@ -56,7 +71,9 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorDescription, ...] = (
         # HA's LOCK binary_sensor class is inverted by design: `on` means
         # *unlocked*, `off` means *locked*. Register 0x100F uses 1=locked, so
         # this has to return True when the connector is UNlocked.
-        value_fn=lambda d: d.get("lock_status") == 0,
+        value_fn=lambda d: (
+            d["lock_status"] == 0 if d.get("lock_status") in (0, 1) else None
+        ),
     ),
     FoxESSBinarySensorDescription(
         key="auto_phase_switch", name="Auto Phase Switch",

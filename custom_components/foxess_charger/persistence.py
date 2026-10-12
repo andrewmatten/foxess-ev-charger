@@ -335,7 +335,14 @@ class ChargerStorage:
     # ── saving ───────────────────────────────────────────────────────────
 
     def _legacy_session_payload(self) -> dict:
-        paused = self._controller is not None and not self._controller["enabled"]
+        c = self._controller
+        # A fault latch or Stop fallback leaves `enabled` set but must not
+        # charge, so it is projected as paused too. The legacy files are
+        # written first, so this also protects a restart after the new state
+        # file failed to save (the fingerprint mismatch imports this view).
+        paused = c is not None and (
+            not c["enabled"] or c["safety_latched"] or c["stop_fallback"]
+        )
         payload = dict(self._session_fields)
         # 2.4.3 reads stop_pending as "a Stop is outstanding" and keeps
         # stopping until the charger reports inactive - the protective

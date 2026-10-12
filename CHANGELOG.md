@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.0.5 - 2026-10-09
+
+- A session still charging when the link comes back is no longer stopped by a leftover protective zero. After a status outage longer than the 20 s grace, a first good reading that shows the session running writes nothing; the next matching reading (about 3 s later) lifts the protection and the power limit is refreshed as normal. Unreadable or non-charging readings still get zero, and if the readings keep disagreeing the zero goes out once 20 s pass without a confirmed write, as before.
+- Known: a power or current limit change (for example from an automation) that arrives in the few seconds between the link coming back and the protection lifting still writes the protective zero, which ends the session.
+
+## 3.0.4 - 2026-10-04
+
+- After a restart, a saved "enabled" record is not resumed if the charger still holds a zero power limit (a recent pause or fault stop whose save may not have landed). Charging stays paused until an explicit enable.
+- If an enable or a limit increase can't be saved, it is not applied and the command fails; the previous limit stays in force. Pauses and decreases still apply immediately.
+- Last Session Energy uses the per-session counter's change when the lifetime counter is unavailable (it previously reported the whole counter), and shows unknown instead of 0 when neither can be measured. Average power follows.
+- The connector Lock switch shows unknown (not locked) when the charger reports an invalid lock value.
+
+## 3.0.3 - 2026-10-03
+
+- If the charger ignores or can't confirm a zero-power write while still drawing, the integration now falls back to the 0x4001 Stop command instead of just retrying zero. Charging stops; the pause still reports an error because the setpoint itself wasn't confirmed.
+- A charger fault (status 6 or fault bits) now latches even when another field in the same status frame is unreadable. An all-0xFFFF fault register is treated as unknown, not as a fault.
+- On a fault, zero is written before the state is saved, and every save is time-limited (10 s), so a stuck disk can no longer hold back the protective zero or the heartbeat.
+- A fault latch or Stop fallback is now saved to the rollback (2.4.3) files as paused, so a failed save followed by a restart can't resume charging.
+- An unreadable power-limit read-back now counts as a mismatch: if the charger can't be shown to hold the requested limit for 60 s, output latches to zero (as an unreadable current limit already did).
+- A saved "enabled" record with no power limit now restores paused.
+- If entity setup fails after the controller started, the controller is closed instead of being left running.
+- Vehicle Connected, Charging, Locked, Fault and Alarm show unknown (not off) when the charger reports an invalid value. Fault is now on for charger status 6 even with no fault bits.
+- Total Energy / Current Session Energy show unknown instead of 0 when a reading is rejected and no earlier good value exists.
+- Transport Errors attributes now show the controller's real counters (`refreshes`, `refresh_failures`, `stop_fallbacks`, `persist_failures`); the old 2.4.3 counter attributes show unknown instead of a made-up 0.
+
+## 3.0.2 - 2026-10-03
+
+- An enable (or limit change) now reads a fresh, valid, fault-free charger status before writing any positive power. If the status can't be read within the 20 s telemetry grace, the enable fails and zero is written instead of positive power.
+- Status reads while confirming a start count toward the telemetry grace: if status stays unreadable for 20 s the start is aborted and zero is written (previously held for up to 45 s).
+- A charger fault seen during an enable, limit change or pause/stop confirmation now latches the fault and writes zero immediately, the same as background polling.
+
 ## 3.0.1 - 2026-10-02
 
 - The logbook now shows which automation or user turned the charger on/off or changed its power.

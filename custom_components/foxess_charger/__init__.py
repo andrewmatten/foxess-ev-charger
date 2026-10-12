@@ -137,7 +137,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "storage": storage,
         "restore_issues": list(loaded.issues),
     }
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        # The controller is already writing heartbeats: never leave it
+        # running unowned, or a later setup would add a second writer.
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        await _async_close_quietly(controller)
+        try:
+            await coordinator.async_shutdown()
+        except Exception:  # noqa: BLE001 - must not mask the setup failure
+            _LOGGER.exception("Error shutting down FoxESS coordinator")
+        raise
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 

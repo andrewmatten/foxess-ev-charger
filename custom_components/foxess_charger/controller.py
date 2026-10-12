@@ -6,9 +6,10 @@ Stop is sent only as a fallback when a zero setpoint fails to stop a session,
 after which every cap/power write is suppressed until an explicit enable.
 
 Everything the controller wants the hardware to do is derived from one frozen
-``Intent`` record. Each change bumps its revision and is persisted before any
-write is dispatched. Immediately before every write (under one lock, with no
-await in between) the value about to be sent is compared with the value the
+``Intent`` record. Each change bumps its revision and is persisted (with a
+time bound) before any write is dispatched, except a fault latch, whose
+protective zero goes out first. Immediately before every write (under one
+lock, with no await in between) the value about to be sent is compared with the value the
 *latest* intent derives; if they differ the work is dropped as superseded, so
 an older value can never follow a newer one onto the wire.
 
@@ -73,6 +74,9 @@ DRAWING_STATUS = {2, 3}
 REFUSING_STATUS = {6, 8}           # fault, locked
 FAULT_STATUS = 6
 FAULT_OFFSET = REG_FAULT_CODE - REG_STATUS_BLOCK_START
+# Both fault registers reading 0xFFFF is the unknown sentinel, like 65535 for
+# status and connector: not evidence of a fault (the telemetry grace applies).
+UNKNOWN_FAULT_CODE = 0xFFFFFFFF
 STATUS_READ_COUNT = 28             # 0x1000..0x101B (fault code at 0x101A)
 
 # (min, max) raw values accepted by async_set_register.
@@ -197,6 +201,7 @@ class ChargingController:
         retry_interval: float = 3.0,
         pause_confirmation_timeout: float = 30.0,
         telemetry_grace: float = 20.0,
+        persist_timeout: float = 10.0,
         read_snapshot: Callable[[Any], Awaitable[dict]] | None = None,
     ) -> None:
         if read_snapshot is None:
@@ -204,6 +209,8 @@ class ChargingController:
             read_snapshot = lambda _io: reader.async_read()  # noqa: E731
         self._io = io
         self._persist = persist
+        # A save that hangs must not hold the lock (and the heartbeat) hostage.
+        self._persist_timeout = persist_timeout
         self._clock = clock
         self._sleep = sleep
         self._timeout = confirmation_timeout
@@ -220,6 +227,7 @@ class ChargingController:
         self._bad_since: float | None = None
         self._bad_count = 0
         self._good_first: _Evidence | None = None   # recovery candidate
+        self._hold_since: float | None = None       # recovery hold start (_op_refresh)
         self._next_safety_try = 0.0
         self._persisted = True
         # Latest intent not yet durable; retried from the refresh loop.
@@ -355,13 +363,41 @@ class ChargingController:
         self._persisted = await self._save_intent()
         return self._intent
 
+    async def _update_positive(self, **changes) -> Intent:
+        """``_update`` for a change that may allow more output (enable, higher
+        limit). If the save fails and output would rise, the changed fields
+        are put back (unless something newer replaced them) and the command
+        fails: unsaved permission never reaches the wire, so a restart cannot
+        disagree with what was applied. Protective changes use ``_update``."""
+        before = self._intent
+        intent = await self._update(**changes)
+        if self._persisted or not self._raises_output(before, intent):
+            return intent
+        undo = {k: getattr(before, k) for k, v in changes.items()
+                if getattr(self._intent, k) == v}
+        self._intent = replace(self._intent, revision=self._intent.revision + 1, **undo)
+        raise ControlError(self._persist_error or "change could not be saved; not applied")
+
+    @staticmethod
+    def _raises_output(before: Intent, after: Intent) -> bool:
+        def allowed(i: Intent) -> int:
+            if not i.enabled or i.safety_latched or i.stop_fallback or i.power_raw is None:
+                return 0
+            return i.power_raw if i.power_raw >= MIN_ENABLE_POWER_RAW else 0
+
+        if allowed(after) > allowed(before):
+            return True
+        return bool(allowed(after)) and _is_int(after.current_raw) \
+            and _is_int(before.current_raw) and after.current_raw > before.current_raw
+
     async def _save_intent(self) -> bool:
         """Persist the current intent; on failure mark it pending so the
         refresh loop keeps retrying. Never blocks protective writes."""
         if self._persist is None:
             return True
         try:
-            await self._persist(self.export_state())
+            await asyncio.wait_for(
+                self._persist(self.export_state()), self._persist_timeout)
         except Exception as err:  # noqa: BLE001 - never block protective writes
             self._persist_pending = True
             self._persist_error = f"intent revision {self._intent.revision} not saved: {err}"
@@ -463,6 +499,7 @@ class ChargingController:
                 if ev.at - first.at >= OBSERVATION_GAP_S:
                     self._good_first = None
                     self._protect.discard(_REASON_TELEMETRY)
+                    self._hold_since = None
             else:
                 self._good_first = ev
         else:
@@ -475,19 +512,38 @@ class ChargingController:
         return before != (_REASON_TELEMETRY in self._protect)
 
     async def _note_fault(self, ev: _Evidence, fault_code: Any = None) -> bool:
-        """Latch on a hard fault (status 6 or a nonzero fault code in a valid
-        observation). The latch makes the wire value zero, which the refresh
-        loop keeps re-sending; clearing the fault does not resume charging,
-        only an explicit enable does. True if the latch was newly set."""
-        faulted = ev.valid and (
-            ev.status == FAULT_STATUS or (_is_int(fault_code) and fault_code != 0)
+        """Latch on a hard fault (status 6 or a known nonzero fault code) and
+        put zero on the wire at once. Fault evidence stands on its own: an
+        unknown connector or power field in the same frame does not mask it.
+        The refresh loop keeps re-sending the zero; clearing the fault does
+        not resume charging, only an explicit enable does. True if the latch
+        was newly set."""
+        faulted = ev.status == FAULT_STATUS or (
+            _is_int(fault_code) and fault_code not in (0, UNKNOWN_FAULT_CODE)
         )
         if not faulted or self._intent.safety_latched:
             return False
         self._last_error = f"charger fault (status {ev.status}, fault code {fault_code})"
         _LOGGER.error("FoxESS %s; output latched to zero", self._last_error)
-        await self._update(safety_latched=True)
+        await self._latch_fault()
         return True
+
+    async def _observe(self) -> _Evidence:
+        """Fresh status read on a command path, with the same telemetry-grace
+        and fault-latch processing as refresh and polling. A new fault latch
+        puts zero on the wire before the command goes any further."""
+        ev = await self._read_status()
+        self._note_telemetry(ev)
+        await self._note_fault(ev, ev.fault_code)
+        return ev
+
+    def _abort_if_unsafe(self) -> None:
+        """Stop a positive command once a fault latched or the telemetry grace
+        ran out; the caller revokes with a confirmed zero."""
+        if self._intent.safety_latched:
+            raise ControlError(self._last_error or "charger fault; output latched to zero")
+        if _REASON_TELEMETRY in self._protect:
+            raise ControlError("charger status unreadable for the telemetry grace; enable aborted")
 
     def _session_active(self, ev: _Evidence | None) -> bool:
         return (
@@ -607,7 +663,7 @@ class ChargingController:
         first: float | None = None
         while True:
             self._check(wire)
-            ev = await self._read_status()
+            ev = await self._observe()
             if ok(ev):
                 if first is not None and ev.at - first >= OBSERVATION_GAP_S:
                     return ev
@@ -650,6 +706,12 @@ class ChargingController:
             if ev.drawing:
                 await self._stop_sequence()
             return CommandResult("confirmed", intent.revision, None)
+        if power:
+            try:
+                await self._preflight(wire, self._clock() + self._start_timeout)
+            except ControlError:
+                await self._revoke()
+                raise
         try:
             # Each register gets its own fresh confirmation_timeout window
             # rather than splitting one between them - a slow transaction on
@@ -663,6 +725,8 @@ class ChargingController:
                     REG_MAX_CHARGING_POWER, power, wire, self._clock() + self._timeout)
         except ControlError:
             await self._latch_fault()
+            if power == 0:
+                await self._stop_if_drawing()
             raise
         if power == 0 and self._explicit_zero():
             ok = lambda ev: (  # noqa: E731
@@ -691,11 +755,28 @@ class ChargingController:
         self._counters["confirmations"] += 1
         return CommandResult("confirmed", intent.revision, power)
 
+    async def _preflight(self, wire, deadline) -> None:
+        """Before any positive write: a fresh valid, fault-free frame. An
+        unplugged cable passes (the enable is then staged); a refusing status,
+        a fault, or no valid frame within the telemetry grace raises."""
+        while True:
+            self._check(wire)
+            ev = await self._observe()
+            self._abort_if_unsafe()
+            if ev.valid and ev.status in REFUSING_STATUS:
+                raise ControlError(f"charger refuses to charge (status {ev.status})")
+            if ev.valid:
+                return
+            if self._clock() >= deadline:
+                raise ControlError("no valid charger status; enable not applied")
+            await self._sleep(POLL_STEP_S)
+
     async def _confirm_session(self, wire, deadline) -> bool:
         """True once a session is seen; False if the cable is definitely unplugged."""
         while True:
             self._check(wire)
-            ev = await self._read_status()
+            ev = await self._observe()
+            self._abort_if_unsafe()
             if ev.valid:
                 self._last_obs = ev
             if ev.valid and ev.status in REFUSING_STATUS:
@@ -728,6 +809,16 @@ class ChargingController:
                 await self._update(safety_latched=True)
                 raise ControlError("charging did not stop after zero power and Stop")
 
+    async def _stop_if_drawing(self) -> None:
+        """A zero setpoint could not be confirmed (ignored, refused or not
+        readable back). 0x4001 Stop is an independent path: use it if the
+        charger is still drawing."""
+        if self._intent.stop_fallback:
+            return
+        ev = await self._read_status()
+        if ev.drawing:
+            await self._stop_sequence()
+
     async def _revoke(self) -> None:
         """A positive command failed: withdraw the authorization and put a
         confirmed zero on the wire, so nothing starts later by itself."""
@@ -738,16 +829,26 @@ class ChargingController:
             )
         except ControlError:
             await self._latch_fault()
+            await self._stop_if_drawing()
 
     async def _latch_fault(self) -> None:
-        """Unconfirmable write: latch the fault and make one protective zero attempt."""
-        if not self._intent.safety_latched:
-            await self._update(safety_latched=True)
+        """Latch the fault and make one protective zero attempt.
+
+        Protection comes before durability: the latch takes effect in memory
+        and the zero is sent before the (bounded) save, so a slow store can
+        never hold the zero back."""
+        newly = not self._intent.safety_latched
+        if newly:
+            self._intent = replace(
+                self._intent, revision=self._intent.revision + 1, safety_latched=True
+            )
         if not self._intent.stop_fallback:
             try:
                 await self._write_once(REG_MAX_CHARGING_POWER, 0, None)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Protective zero write failed")
+        if newly:
+            self._persisted = await self._save_intent()
 
     async def _configure_safety(self, deadline: float) -> None:
         """Write 60 s validity and 6 A fallback with read-back (lock held).
@@ -805,6 +906,23 @@ class ChargingController:
             elif power:
                 # Valid but no active session: zero, never positive.
                 wire, power, current = None, 0, None
+            elif (
+                self._protect == {_REASON_TELEMETRY}
+                and not (self._explicit_zero() or self._intent.stop_fallback or self._released)
+                and (self._intent.power_raw or 0) >= MIN_ENABLE_POWER_RAW
+                and self._session_active(ev)
+                and (self._hold_since is None or self._clock() - self._hold_since < self._grace)
+            ):
+                # Link back: this fresh frame shows the session still running,
+                # but the telemetry protect lifts only on the next agreeing
+                # frame. Hold rather than write that leftover zero: it would
+                # finish the session (status 5, firmware 1.8) and the finish
+                # would revoke a healthy enable. A bad or non-active frame
+                # still gets the zero. Bounded: once a hold has lasted the
+                # telemetry grace with no confirmed write, the zero goes out.
+                if self._hold_since is None:
+                    self._hold_since = self._clock()
+                wire, power, current, held = None, None, None, True
             if not power:
                 self._authorized = None
             try:
@@ -820,21 +938,19 @@ class ChargingController:
                     back = await self._read(address)
                     good = back is not None and back[0] == value
                     ok = ok and good
+                    # An unreadable read-back is unconfirmed, not fine: same
+                    # latch window as a wrong read-back.
+                    seen = True
+                    mismatched = mismatched or not good
                     if address == REG_MAX_CHARGING_CURRENT:
-                        # An unreadable current ceiling is unconfirmed, not
-                        # fine: same degraded state and latch window as a
-                        # wrong read-back.
-                        seen = True
-                        mismatched = mismatched or not good
                         if good:
                             self._degraded.discard(_DEGRADED_CURRENT)
                         else:
                             self._degraded.add(_DEGRADED_CURRENT)
-                    elif back is not None:
-                        seen = True
-                        mismatched = mismatched or not good
                 if seen:
                     self._note_readback(mismatched)
+                    if not mismatched:
+                        self._hold_since = None  # a confirmed write ends any hold
                 if current is None:
                     self._degraded.discard(_DEGRADED_CURRENT)
             except _Superseded:
@@ -843,7 +959,7 @@ class ChargingController:
             if held:
                 ok = False           # retry soon rather than a full interval
             if self._mismatch_count and self._mismatch_persistent():
-                self._last_error = "charger keeps ignoring the setpoint"
+                self._last_error = "charger setpoint not confirmed by read-back"
                 self._note_readback(False)
                 await self._latch_fault()
         self._counters["refreshes" if ok else "refresh_failures"] += 1
@@ -872,6 +988,12 @@ class ChargingController:
                 _LOGGER.warning("Saved charging intent is malformed; starting paused")
                 self._last_error = "malformed saved state"
                 parsed = Intent(enabled=False, revision=0)
+            if parsed.enabled and parsed.power_raw is None:
+                # Enabled needs a concrete authorised cap; only an explicit
+                # enable may choose one.
+                self._last_error = "restored enabled intent has no power limit; paused"
+                _LOGGER.warning(self._last_error)
+                parsed = replace(parsed, enabled=False)
             self._intent = parsed
             if parsed.enabled:
                 # Restored intent is not proof the charger should run now: a
@@ -882,6 +1004,16 @@ class ChargingController:
                     self._last_error = "restored enabled intent without an active session; paused"
                     _LOGGER.warning(self._last_error)
                     self._intent = replace(self._intent, enabled=False)
+                elif parsed.power_raw >= MIN_ENABLE_POWER_RAW:
+                    # A zero cap still in force was written in the last ~60 s
+                    # (a pause or fault zero whose save may not have landed):
+                    # the hardware contradicts the saved enable, so stay paused
+                    # until an explicit enable.
+                    cap = await self._read(REG_MAX_CHARGING_POWER)
+                    if cap is not None and cap[0] == 0:
+                        self._last_error = "restored enabled intent but charger holds a zero cap; paused"
+                        _LOGGER.warning(self._last_error)
+                        self._intent = replace(self._intent, enabled=False)
         if configure_safety:
             self._protect.add(_REASON_SAFETY)
             async with self._lock:
@@ -976,10 +1108,12 @@ class ChargingController:
         """A limit change is not an authorization: while enabled it writes a
         positive value only if a fresh observation shows an active session.
         Otherwise it is staged, and an observed finish revokes the enable."""
-        intent = await self._update(**changes)
+        intent = await self._update_positive(**changes)
         if intent.enabled and not (intent.stop_fallback or intent.safety_latched):
             if self._wire()[0] and not await self._run(self._op_observe):
                 intent = self._intent
+                if intent.safety_latched:
+                    raise ControlError(self._last_error or "charger fault; output latched to zero")
             else:
                 return await self._run(lambda: self._op_apply(intent.revision))
         if not self._persisted:  # a staged value lives only in storage
@@ -989,12 +1123,11 @@ class ChargingController:
     async def _op_observe(self) -> bool:
         """Fresh status read; True if positive output is authorized by it."""
         async with self._lock:
-            ev = await self._read_status()
-            self._note_telemetry(ev)
+            ev = await self._observe()
             if await self._note_session(ev):
                 self._spawn(self._op_refresh)
             # Only this fresh read may authorize; never a stale one.
-            return self._session_active(ev)
+            return self._session_active(ev) and not self._intent.safety_latched
 
     async def async_enable(self) -> CommandResult:
         """Explicit resume; also the only way out of a Stop fallback or fault latch."""
@@ -1008,7 +1141,7 @@ class ChargingController:
                 raise ControlError("no saved power and device maximum unreadable")
             power = regs[0]
         async def enable() -> CommandResult:
-            intent = await self._update(
+            intent = await self._update_positive(
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False
             )
             return await self._run(lambda: self._op_apply(intent.revision))
