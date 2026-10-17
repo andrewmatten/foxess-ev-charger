@@ -76,7 +76,11 @@ The scan interval is configurable via the integration options (default 10 s, ran
 
 ## Credits
 
-Forked and adapted from [ringaction/foxess_charger](https://github.com/ringaction/foxess_charger). Thanks to the original author for the groundwork on the FoxESS Modbus protocol.
+Forked from [ringaction/foxess_charger](https://github.com/ringaction/foxess_charger). Thanks to the original author for the groundwork on the FoxESS Modbus protocol. Since the fork this project has been extended with its own session control, safety handling, energy guard, device triggers, blueprint and test suite.
+
+## AI assistance
+
+This integration was developed with the help of AI coding assistants (Claude and Codex) and tested on real hardware (a FoxESS A7300P1-E-B-WO). Bug reports and pull requests are welcome.
 
 ## Changelog
 
