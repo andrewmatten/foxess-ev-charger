@@ -1,12 +1,16 @@
 {
   "domain": "foxess_charger",
   "name": "FoxESS EV Charger",
-  "version": "3.0.5",
+  "codeowners": [
+    "@andrewmatten"
+  ],
   "config_flow": true,
+  "dependencies": [
+    "device_automation"
+  ],
   "documentation": "https://github.com/andrewmatten/foxess-ev-charger",
+  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/andrewmatten/foxess-ev-charger/issues",
   "requirements": [],
-  "dependencies": ["device_automation"],
-  "codeowners": ["@andrewmatten"],
-  "iot_class": "local_polling"
+  "version": "3.0.5"
 }
