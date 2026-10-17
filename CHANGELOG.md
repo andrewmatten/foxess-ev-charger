@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.6 - 2026-10-17
+
+- No behaviour change. Packaging for the HACS default store: brand icons, HACS and hassfest validation, sorted manifest keys, GitHub Issues enabled.
+
 ## 3.0.5 - 2026-10-09
 
 - A session still charging when the link comes back is no longer stopped by a leftover protective zero. After a status outage longer than the 20 s grace, a first good reading that shows the session running writes nothing; the next matching reading (about 3 s later) lifts the protection and the power limit is refreshed as normal. Unreadable or non-charging readings still get zero, and if the readings keep disagreeing the zero goes out once 20 s pass without a confirmed write, as before.
