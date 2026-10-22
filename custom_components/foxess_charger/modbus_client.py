@@ -161,7 +161,8 @@ class FoxESSModbusClient:
     # ── Framing ───────────────────────────────────────────────────────────────
 
     def _next_tid(self) -> int:
-        self._tid = (self._tid + 1) % 0xFFFF
+        """Transaction IDs count 1..0xFFFE and then start again at 0."""
+        self._tid = 0 if self._tid >= 0xFFFE else self._tid + 1
         return self._tid
 
     def _close(self) -> None:
