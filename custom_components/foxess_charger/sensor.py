@@ -1,482 +1,421 @@
-"""Sensors for FoxESS EV Charger."""
+"""Sensor platform: charger telemetry, energy counters, session history and
+transport health.
+
+Every sensor is declared as a description: where its value comes from in the
+coordinator's observation, how a raw register turns into a state, and which
+register block decides its availability. A number that only a garbled frame
+could produce (6553.5 V from a 0xFFFF register, say) is reported as unknown
+instead of being shown.
+"""
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Callable
+import logging
+import math
+from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass, SensorEntity, SensorEntityDescription, SensorStateClass,
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     EntityCategory,
-    UnitOfElectricCurrent, UnitOfElectricPotential,
-    UnitOfEnergy, UnitOfPower, UnitOfTemperature, UnitOfTime,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import FoxESSBlockAvailabilityMixin, FoxESSChargerCoordinator, build_device_info
 from .const import (
-    DOMAIN, STATUS_MAP, CP_STATUS_MAP, CC_STATUS_MAP, LOCK_STATUS_MAP,
-    WORK_MODE_MAP, PHASE_SEQ_MAP, STOP_REASON_MAP, decode_enum,
-    BLOCK_STATUS, BLOCK_CONFIG,
+    BLOCK_CONFIG,
+    BLOCK_STATUS,
+    CC_STATUS_MAP,
+    CP_STATUS_MAP,
+    DOMAIN,
+    LOCK_STATUS_MAP,
+    PHASE_SEQ_MAP,
+    STATUS_MAP,
+    STOP_REASON_MAP,
+    WORK_MODE_MAP,
+    decode_enum,
     get_capabilities,
 )
 from .protocol import STATUS_PHASE_SWITCHING
-from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
+Observation = Mapping[str, Any]
+
+# Status values the sensor can show: the register's own table plus the
+# phase-switching state three-phase units report while changing over.
 STATUS_SENSOR_MAP = {**STATUS_MAP, STATUS_PHASE_SWITCHING: "phase_switching"}
 
-
-def _kwh(raw: int | None) -> float | None:
-    """Energy counter in kWh. A counter the energy guard rejected with no
-    known-good baseline is absent: unknown, never 0 (a 0 on a
-    total_increasing sensor reads as a meter reset)."""
-    return None if raw is None else round(raw * 0.1, 2)
+# Counters summed into the Transport Errors state. stale_replies is left out
+# on purpose: discarding a late reply is the client coping with a slow
+# charger, not a framing failure.
+_FRAMING_ERRORS = (
+    "txid_mismatches", "short_reads", "connection_errors",
+    "malformed_headers", "unit_id_mismatches", "write_echo_mismatches",
+)
+# Controller counters shown as attributes. The later ones are 2.4.3 names the
+# 3.x controller does not produce: they read None (unknown), never a made-up 0.
+_CONTROL_COUNTERS = (
+    "refreshes", "refresh_failures", "stop_fallbacks", "persist_failures",
+    "setpoint_reasserts", "setpoint_drift_events", "heartbeat_write_failures",
+    "stop_pending", "stop_write_failures", "stop_retries",
+)
 
 
 @dataclass(frozen=True, kw_only=True)
-class FoxESSChargerSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[dict], StateType] = lambda _: None
-    attrs_fn: Callable[[dict], dict] = lambda _: {}
-    # Physical plausibility bounds for numeric sensors (current/power/
-    # temperature/voltage) - a raw register value wildly outside what this
-    # hardware can ever legitimately produce (a corrupt read, not a real
-    # measurement) is reported as unavailable rather than displayed as-is.
-    # None means "no bound in that direction".
-    min_plausible: float | None = None
-    max_plausible: float | None = None
-    # which MODEL_CAPABILITIES key (const.py) this
-    # entity's max_plausible bound should be derived from instead of the
-    # static literal above. Set only on the three power sensors below - a
-    # hardcoded ~10kW ceiling (right for the single-phase 7.3kW A7300) would
-    # incorrectly reject perfectly real readings from the three-phase A011
-    # (11kW) / A022 (22kW) models this codebase already has capability
-    # entries for (number.py's Max Charging Current/Power already derives
-    # its bounds the same way - see FoxESSNumber.native_max_value). None
-    # means "use the static max_plausible above as-is" - the current
-    # sensors' static 40A ceiling already comfortably covers every known
-    # model's rated current (32A max), so they don't need this.
-    capability_key: str | None = None
-    # Headroom multiplier applied on top of the detected model's own rated
-    # max when capability_key is set - same SAFETY_FACTOR-style reasoning as
-    # energy_guard.py: margin for measurement noise/rounding, not a second
-    # guess at the real rating. 1.5x mirrors ENERGY_GUARD_SAFETY_FACTOR.
-    capability_margin: float = 1.5
-    # Which batched register block (see const.py's BLOCK_* constants) this
-    # entity's value_fn reads from - drives FoxESSBlockAvailabilityMixin's
-    # availability check (see __init__.py). Defaults to BLOCK_STATUS since
-    # nearly every sensor here reads the 0x1000-0x101D batch; the couple
-    # that don't (work_mode_sensor from the 0x3000 config block) override it
-    # explicitly below, and transport_errors sets None (not tied to any
-    # single block - it reflects the Modbus client's own counters).
+class FoxESSSensorDescription(SensorEntityDescription):
+    """How one sensor reads its state out of an observation."""
+
+    value_fn: Callable[[Observation], StateType] = lambda _: None
+    attrs_fn: Callable[[Observation], dict] = lambda _: {}
+    # Readings outside [valid_min, valid_max] cannot be real measurements on
+    # this hardware and are reported as unknown. None leaves that side open.
+    valid_min: float | None = None
+    valid_max: float | None = None
+    # When set, the upper limit is this MODEL_CAPABILITIES rating of the
+    # detected model times rated_headroom (valid_max is then ignored), so a
+    # 22 kW reading is accepted on an A022 but not on the 7.3 kW A7300. The
+    # 1.5 headroom matches the energy guard's safety factor.
+    rated_key: str | None = None
+    rated_headroom: float = 1.5
+    # Register block whose freshness gates availability (const.BLOCK_*);
+    # None = not tied to any block.
     block: str | None = BLOCK_STATUS
 
+    def valid_range(self, data: Observation) -> tuple[float, float] | None:
+        """Accepted (low, high) range for a numeric reading, or None when
+        this sensor has no plausibility limits."""
+        if self.valid_min is None and self.valid_max is None and self.rated_key is None:
+            return None
+        low = -math.inf if self.valid_min is None else self.valid_min
+        if self.rated_key is not None:
+            rating = get_capabilities(data.get("id_model_code"))[self.rated_key]
+            return low, rating * self.rated_headroom
+        return low, math.inf if self.valid_max is None else self.valid_max
 
-SENSORS: tuple[FoxESSChargerSensorDescription, ...] = (
-    # ── System ──────────────────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
-        key="software_version", name="Software Version", icon="mdi:information-outline",
-        translation_key="software_version",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: f"{d.get('software_version',0)>>8}.{d.get('software_version',0)&0xFF}",
+
+# ── value helpers ────────────────────────────────────────────────────────────
+# A missing register reads as 0 in the scaled helpers below; that has always
+# been the behaviour and the plausibility limits apply to the result.
+
+def _scaled(key: str, digits: int = 1) -> Callable[[Observation], float]:
+    """Register holding tenths of the unit."""
+    return lambda data: round(data.get(key, 0) * 0.1, digits)
+
+
+def _decoded(key: str, table: dict[int, str], *, enum: bool = True) -> Callable[[Observation], str | None]:
+    """Enum register through its code table. For an ENUM sensor an
+    unrecognised code shows the translatable "unknown" option; otherwise the
+    state is simply left empty. A missing reading is always None."""
+    unknown = "unknown" if enum else None
+    return lambda data: decode_enum(data.get(key), table, key, unknown_label=unknown)
+
+
+def _firmware(data: Observation) -> str:
+    raw = data.get("software_version", 0)
+    return f"{raw >> 8}.{raw & 0xFF}"
+
+
+def _port_celsius(data: Observation) -> float | None:
+    raw = data.get("port_temp_raw")
+    if raw in (None, 65535):  # 65535: no probe fitted
+        return None
+    return round(raw * 0.1 - 50, 1)
+
+
+def _board_celsius(data: Observation) -> float:
+    return round(data.get("ambient_temp_raw", 0) * 0.1 - 50, 1)
+
+
+def _kwh(key: str) -> Callable[[Observation], float | None]:
+    """Energy counter in kWh. A counter the energy guard rejected with no
+    earlier good value is absent and stays unknown: a 0 on a
+    total_increasing sensor would read as a meter reset."""
+    def value(data: Observation) -> float | None:
+        raw = data.get(key)
+        return None if raw is None else round(raw * 0.1, 2)
+    return value
+
+
+def _rfid(data: Observation) -> str:
+    card = data.get("rfid_card", 0)
+    return f"{card:08X}" if card > 0 else "None"
+
+
+def _last_session(field: str) -> Callable[[Observation], Any]:
+    return lambda data: (data.get("last_session") or {}).get(field)
+
+
+def _transport_errors(data: Observation) -> int:
+    return sum(data.get(f"diag_{name}", 0) for name in _FRAMING_ERRORS)
+
+
+def _transport_details(data: Observation) -> dict:
+    details = {name: data.get(f"diag_{name}", 0) for name in _FRAMING_ERRORS}
+    details["stale_replies"] = data.get("diag_stale_replies", 0)
+    details["energy_rejections"] = data.get("diag_energy_rejections", 0)
+    details.update({name: data.get(f"diag_{name}") for name in _CONTROL_COUNTERS})
+    # Full context of recent energy rejections, so a recorder correction can
+    # be worked out later rather than guessed.
+    details["recent_energy_rejections"] = data.get("energy_rejection_log", [])
+    return details
+
+
+def _enum_options(table: dict[int, str]) -> list[str]:
+    return [*table.values(), "unknown"]
+
+
+# ── descriptions ─────────────────────────────────────────────────────────────
+
+def _voltage(phase: int, *, enabled: bool) -> FoxESSSensorDescription:
+    key = f"l{phase}_voltage"
+    return FoxESSSensorDescription(
+        key=key, name=f"L{phase} Voltage", translation_key=key, icon="mdi:flash",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        entity_registry_enabled_default=enabled,
+        # 300 V covers any single/split-phase mains with margin and still
+        # catches a 0xFFFF register (6553.5 V).
+        valid_min=0, valid_max=300,
+        value_fn=_scaled(f"{key}_raw"),
+    )
+
+
+def _current(key: str, name: str, raw_key: str, *, measured: bool = True,
+             enabled: bool = True) -> FoxESSSensorDescription:
+    return FoxESSSensorDescription(
+        key=key, name=name, translation_key=key, icon="mdi:current-ac",
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT if measured else None,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        entity_registry_enabled_default=enabled,
+        # 40 A: the highest rated current of any known model (32 A) plus
+        # headroom; anything above is a bad read.
+        valid_min=0, valid_max=40,
+        value_fn=_scaled(raw_key),
+    )
+
+
+def _power(key: str, name: str, raw_key: str, *, icon: str, digits: int,
+           measured: bool) -> FoxESSSensorDescription:
+    return FoxESSSensorDescription(
+        key=key, name=name, translation_key=key, icon=icon,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT if measured else None,
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        valid_min=0, rated_key="max_power_kw",
+        value_fn=_scaled(raw_key, digits),
+    )
+
+
+def _enum_sensor(key: str, name: str, icon: str, data_key: str, table: dict[int, str], *,
+                 translation_key: str | None = None, block: str = BLOCK_STATUS,
+                 enabled: bool = True) -> FoxESSSensorDescription:
+    return FoxESSSensorDescription(
+        key=key, name=name, translation_key=translation_key or key, icon=icon,
+        device_class=SensorDeviceClass.ENUM, options=_enum_options(table),
+        entity_registry_enabled_default=enabled, block=block,
+        value_fn=_decoded(data_key, table),
+    )
+
+
+SENSORS: tuple[FoxESSSensorDescription, ...] = (
+    # Identity (diagnostic).
+    FoxESSSensorDescription(
+        key="software_version", name="Software Version", translation_key="software_version",
+        icon="mdi:information-outline", entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_firmware,
     ),
-    FoxESSChargerSensorDescription(
-        key="device_address", name="Device Address", icon="mdi:identifier",
-        translation_key="device_address",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.get("device_address"),
+    FoxESSSensorDescription(
+        key="device_address", name="Device Address", translation_key="device_address",
+        icon="mdi:identifier", entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.get("device_address"),
     ),
-    FoxESSChargerSensorDescription(
-        key="id_serial_number", name="Serial Number", icon="mdi:card-account-details-outline",
-        translation_key="id_serial_number",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda d: d.get("id_serial_number"),
+    FoxESSSensorDescription(
+        key="id_serial_number", name="Serial Number", translation_key="id_serial_number",
+        icon="mdi:card-account-details-outline", entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.get("id_serial_number"),
     ),
-    # ── Status ───────────────────────────────────────────────────────────────
-    # All of these route through decode_enum() rather than a `.get(raw,
-    # "unknown")` fallback or a hand-rolled ternary. An unrecognized raw
-    # value passes unknown_label="unknown" here - a real, translatable state
-    # (added to `options` below, since HA raises if an ENUM sensor's value
-    # isn't one of its declared options) rather than a ternary's "else"
-    # branch silently claiming a specific known state that isn't actually
-    # what was read. Distinct from "no reading yet" (raw value is None),
-    # which still surfaces as HA's own native unknown state - see
-    # decode_enum()'s docstring in const.py.
-    FoxESSChargerSensorDescription(
-        key="status", name="Status", icon="mdi:ev-station",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="status",
-        # "phase_switching" (status 9) is appended so existing options keep
-        # their positions.
-        options=[*STATUS_SENSOR_MAP.values(), "unknown"],
-        value_fn=lambda d: decode_enum(d.get("status"), STATUS_SENSOR_MAP, "status", unknown_label="unknown"),
+    # State. Each table gains an "unknown" option so an unrecognised code is
+    # a visible, translated state (and never mistaken for a real one), while
+    # "no reading yet" stays HA's own unknown.
+    # "phase_switching" comes after the original states so they keep their
+    # option positions.
+    _enum_sensor("status", "Status", "mdi:ev-station", "status", STATUS_SENSOR_MAP),
+    _enum_sensor("cp_status", "CP Status", "mdi:connection", "cp_status", CP_STATUS_MAP),
+    _enum_sensor("cc_status", "CC Status", "mdi:cable-data", "cc_status", CC_STATUS_MAP),
+    _enum_sensor("lock_status", "Lock Status", "mdi:lock", "lock_status", LOCK_STATUS_MAP),
+    # Read from the settings block. The entity key ("work_mode_sensor") and
+    # translation key ("work_mode") differ on purpose.
+    _enum_sensor("work_mode_sensor", "Work Mode", "mdi:cog", "work_mode", WORK_MODE_MAP,
+                 translation_key="work_mode", block=BLOCK_CONFIG),
+    _enum_sensor("phase_sequence", "Phase Sequence", "mdi:electric-switch", "phase_sequence",
+                 PHASE_SEQ_MAP, enabled=False),  # phase-switch box only
+    # A plain text sensor (no options), so an unrecognised code is just empty.
+    FoxESSSensorDescription(
+        key="stop_reason", name="Stop Reason", translation_key="stop_reason",
+        icon="mdi:information",
+        value_fn=_decoded("stop_reason", STOP_REASON_MAP, enum=False),
     ),
-    FoxESSChargerSensorDescription(
-        key="cp_status", name="CP Status", icon="mdi:connection",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="cp_status",
-        options=[*CP_STATUS_MAP.values(), "unknown"],
-        value_fn=lambda d: decode_enum(d.get("cp_status"), CP_STATUS_MAP, "cp_status", unknown_label="unknown"),
-    ),
-    FoxESSChargerSensorDescription(
-        key="cc_status", name="CC Status", icon="mdi:cable-data",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="cc_status",
-        options=[*CC_STATUS_MAP.values(), "unknown"],
-        value_fn=lambda d: decode_enum(d.get("cc_status"), CC_STATUS_MAP, "cc_status", unknown_label="unknown"),
-    ),
-    FoxESSChargerSensorDescription(
-        key="lock_status", name="Lock Status", icon="mdi:lock",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="lock_status",
-        options=[*LOCK_STATUS_MAP.values(), "unknown"],
-        value_fn=lambda d: decode_enum(d.get("lock_status"), LOCK_STATUS_MAP, "lock_status", unknown_label="unknown"),
-    ),
-    FoxESSChargerSensorDescription(
-        key="work_mode_sensor", name="Work Mode", icon="mdi:cog",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="work_mode",  # entity key differs from the translation key on purpose
-        options=[*WORK_MODE_MAP.values(), "unknown"],
-        block=BLOCK_CONFIG,  # work_mode comes from the 0x3000 config block, not the status batch
-        value_fn=lambda d: decode_enum(d.get("work_mode"), WORK_MODE_MAP, "work_mode", unknown_label="unknown"),
-    ),
-    FoxESSChargerSensorDescription(
-        key="phase_sequence", name="Phase Sequence", icon="mdi:electric-switch",
-        device_class=SensorDeviceClass.ENUM,
-        translation_key="phase_sequence",
-        options=[*PHASE_SEQ_MAP.values(), "unknown"],
-        entity_registry_enabled_default=False,  # phase-switch-box only
-        value_fn=lambda d: decode_enum(d.get("phase_sequence"), PHASE_SEQ_MAP, "phase_sequence", unknown_label="unknown"),
-    ),
-    FoxESSChargerSensorDescription(
-        key="stop_reason", name="Stop Reason", icon="mdi:information",
-        translation_key="stop_reason",
-        # Not a device_class=ENUM sensor (no declared `options` list to
-        # violate), so no unknown_label needed - an unrecognized value just
-        # surfaces as HA's native unknown state, same as always.
-        value_fn=lambda d: decode_enum(d.get("stop_reason"), STOP_REASON_MAP, "stop_reason"),
-    ),
-    # ── Temperaturen ─────────────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
-        key="port_temperature", name="Port Temperature",
-        translation_key="port_temperature",
-        device_class=SensorDeviceClass.TEMPERATURE,
+    # Temperatures. -40..120 °C is far outside anything the electronics can
+    # reach yet well inside what a corrupt register decodes to.
+    FoxESSSensorDescription(
+        key="port_temperature", name="Port Temperature", translation_key="port_temperature",
+        icon="mdi:thermometer", device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        icon="mdi:thermometer",
-        # Not fitted on every model - the A7300P1 reports the 65535 "no sensor"
-        # sentinel here, so this sits permanently at `unknown` and looks broken.
-        # Disabled by default; enable it manually if your hardware has the probe.
-        # Port over-temperature protection still exists in firmware regardless
-        # (fault bit 4, charging_port_overtemp) - only the reading is absent.
+        # Off by default: the A7300P1 has no port probe and only ever reports
+        # 65535, which would leave a permanently unknown entity. The firmware's
+        # port over-temperature protection (fault bit 4) does not need it.
         entity_registry_enabled_default=False,
-        # -40..120C: generous bound for board-mounted electronics - well
-        # outside anything this hardware can plausibly reach, but well
-        # inside what a corrupt/garbled register read can produce.
-        min_plausible=-40, max_plausible=120,
-        value_fn=lambda d: round(d["port_temp_raw"] * 0.1 - 50, 1)
-            if d.get("port_temp_raw") not in (None, 65535) else None,
+        valid_min=-40, valid_max=120,
+        value_fn=_port_celsius,
     ),
-    FoxESSChargerSensorDescription(
-        # Named "Ambient" in the protocol spec, but it is a board-mounted sensor
-        # inside the enclosure, not room air: measured 23.6 C idle and 55.5 C
-        # while delivering 30 A on the same unit, same afternoon. Reported as
-        # internal temperature so the value isn't mistaken for the garage.
+    FoxESSSensorDescription(
+        # The protocol calls this "ambient", but the sensor sits on the board
+        # inside the enclosure: 23.6 °C idle vs 55.5 °C at 30 A on the same
+        # unit, same afternoon. Named Internal so nobody reads it as the
+        # garage temperature.
         key="ambient_temperature", name="Internal Temperature",
         translation_key="ambient_temperature",
-        device_class=SensorDeviceClass.TEMPERATURE,
+        icon="mdi:thermometer", device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        icon="mdi:thermometer",
-        min_plausible=-40, max_plausible=120,
-        value_fn=lambda d: round(d.get("ambient_temp_raw", 0) * 0.1 - 50, 1),
+        valid_min=-40, valid_max=120,
+        value_fn=_board_celsius,
     ),
-    # ── Spannungen ───────────────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
-        key="l1_voltage", name="L1 Voltage",
-        translation_key="l1_voltage",
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        icon="mdi:flash",
-        # 0-300V: covers every real-world single/split-phase mains voltage
-        # worldwide with margin, while still catching a garbled register
-        # (e.g. the raw=65535 sentinel would decode as 6553.5V).
-        min_plausible=0, max_plausible=300,
-        value_fn=lambda d: round(d.get("l1_voltage_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="l2_voltage", name="L2 Voltage",
-        translation_key="l2_voltage",
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        icon="mdi:flash",
-        entity_registry_enabled_default=False,  # single-phase: no L2
-        min_plausible=0, max_plausible=300,
-        value_fn=lambda d: round(d.get("l2_voltage_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="l3_voltage", name="L3 Voltage",
-        translation_key="l3_voltage",
-        device_class=SensorDeviceClass.VOLTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-        icon="mdi:flash",
-        entity_registry_enabled_default=False,  # single-phase: no L3
-        min_plausible=0, max_plausible=300,
-        value_fn=lambda d: round(d.get("l3_voltage_raw", 0) * 0.1, 1),
-    ),
-    # ── Ströme ───────────────────────────────────────────────────────────────
-    # 0-40A: 32A rated max plus headroom for measurement noise/rounding -
-    # anything beyond this on single-phase 7.3kW hardware is a bad read,
-    # not a real current.
-    FoxESSChargerSensorDescription(
-        key="l1_current", name="L1 Current",
-        translation_key="l1_current",
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
-        min_plausible=0, max_plausible=40,
-        value_fn=lambda d: round(d.get("l1_current_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="l2_current", name="L2 Current",
-        translation_key="l2_current",
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
-        entity_registry_enabled_default=False,  # single-phase: no L2
-        min_plausible=0, max_plausible=40,
-        value_fn=lambda d: round(d.get("l2_current_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="l3_current", name="L3 Current",
-        translation_key="l3_current",
-        device_class=SensorDeviceClass.CURRENT,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
-        entity_registry_enabled_default=False,  # single-phase: no L3
-        min_plausible=0, max_plausible=40,
-        value_fn=lambda d: round(d.get("l3_current_raw", 0) * 0.1, 1),
-    ),
-    # ── Leistung ─────────────────────────────────────────────────────────────
-    # Bound derived from the detected model's rated max power (see
-    # capability_key above) rather than a fixed literal - the single-phase
-    # A7300's 7.3kW rating would otherwise incorrectly reject valid readings
-    # from the three-phase A011 (11kW)/A022 (22kW) models. Falls back to the
-    # A7300 default via get_capabilities() itself before a model is known.
-    FoxESSChargerSensorDescription(
-        key="charging_power", name="Charging Power",
-        translation_key="charging_power",
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        icon="mdi:lightning-bolt",
-        min_plausible=0, capability_key="max_power_kw",
-        value_fn=lambda d: round(d.get("power_raw", 0) * 0.1, 2),
-    ),
-    FoxESSChargerSensorDescription(
-        key="max_supported_power", name="Max Supported Power",
-        translation_key="max_supported_power",
-        device_class=SensorDeviceClass.POWER,
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        icon="mdi:lightning-bolt-outline",
-        min_plausible=0, capability_key="max_power_kw",
-        value_fn=lambda d: round(d.get("max_power_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="min_supported_power", name="Min Supported Power",
-        translation_key="min_supported_power",
-        device_class=SensorDeviceClass.POWER,
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        icon="mdi:lightning-bolt-outline",
-        min_plausible=0, capability_key="max_power_kw",
-        value_fn=lambda d: round(d.get("min_power_raw", 0) * 0.1, 1),
-    ),
-    # ── Strom-Limits ─────────────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
-        key="max_supported_current", name="Max Supported Current",
-        translation_key="max_supported_current",
-        device_class=SensorDeviceClass.CURRENT,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
-        min_plausible=0, max_plausible=40,
-        value_fn=lambda d: round(d.get("max_current_raw", 0) * 0.1, 1),
-    ),
-    FoxESSChargerSensorDescription(
-        key="min_supported_current", name="Min Supported Current",
-        translation_key="min_supported_current",
-        device_class=SensorDeviceClass.CURRENT,
-        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
-        min_plausible=0, max_plausible=40,
-        value_fn=lambda d: round(d.get("min_current_raw", 0) * 0.1, 1),
-    ),
-    # ── Energie ──────────────────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
+    # Mains, per phase. L2/L3 only exist on three-phase units.
+    _voltage(1, enabled=True),
+    _voltage(2, enabled=False),
+    _voltage(3, enabled=False),
+    _current("l1_current", "L1 Current", "l1_current_raw"),
+    _current("l2_current", "L2 Current", "l2_current_raw", enabled=False),
+    _current("l3_current", "L3 Current", "l3_current_raw", enabled=False),
+    # Power: limited by the detected model's rating (A7300 until the model
+    # has been read).
+    _power("charging_power", "Charging Power", "power_raw",
+           icon="mdi:lightning-bolt", digits=2, measured=True),
+    _power("max_supported_power", "Max Supported Power", "max_power_raw",
+           icon="mdi:lightning-bolt-outline", digits=1, measured=False),
+    _power("min_supported_power", "Min Supported Power", "min_power_raw",
+           icon="mdi:lightning-bolt-outline", digits=1, measured=False),
+    _current("max_supported_current", "Max Supported Current", "max_current_raw",
+             measured=False),
+    _current("min_supported_current", "Min Supported Current", "min_current_raw",
+             measured=False),
+    # Energy counters, already filtered by the energy guard.
+    FoxESSSensorDescription(
         key="current_session_energy", name="Current Session Energy",
-        translation_key="current_session_energy",
+        translation_key="current_session_energy", icon="mdi:counter",
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        icon="mdi:counter",
-        value_fn=lambda d: _kwh(d.get("current_energy_raw")),
+        value_fn=_kwh("current_energy_raw"),
     ),
-    FoxESSChargerSensorDescription(
-        key="total_energy", name="Total Energy",
-        translation_key="total_energy",
-        device_class=SensorDeviceClass.ENERGY,
+    FoxESSSensorDescription(
+        key="total_energy", name="Total Energy", translation_key="total_energy",
+        icon="mdi:counter", device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        icon="mdi:counter",
-        value_fn=lambda d: _kwh(d.get("total_energy_raw")),
+        value_fn=_kwh("total_energy_raw"),
     ),
-    # ── Konfigurationssensoren ────────────────────────────────────────────────
-    FoxESSChargerSensorDescription(
-        key="alarm_code", name="Alarm Code", icon="mdi:alert",
-        translation_key="alarm_code",
-        value_fn=lambda d: d.get("alarm_code"),
-        attrs_fn=lambda d: {"active_alarms": d.get("active_alarms", [])},
+    # Alarm/fault registers are bitmasks; the active condition names go in
+    # an attribute.
+    FoxESSSensorDescription(
+        key="alarm_code", name="Alarm Code", translation_key="alarm_code", icon="mdi:alert",
+        value_fn=lambda data: data.get("alarm_code"),
+        attrs_fn=lambda data: {"active_alarms": data.get("active_alarms", [])},
     ),
-    FoxESSChargerSensorDescription(
-        key="fault_code", name="Fault Code", icon="mdi:alert-circle",
-        translation_key="fault_code",
-        value_fn=lambda d: d.get("fault_code"),
-        attrs_fn=lambda d: {"active_faults": d.get("active_faults", [])},
+    FoxESSSensorDescription(
+        key="fault_code", name="Fault Code", translation_key="fault_code",
+        icon="mdi:alert-circle",
+        value_fn=lambda data: data.get("fault_code"),
+        attrs_fn=lambda data: {"active_faults": data.get("active_faults", [])},
     ),
-    FoxESSChargerSensorDescription(
-        key="rfid_card", name="RFID Card", icon="mdi:card-account-details",
-        translation_key="rfid_card",
-        # Card IDs are sensitive - disabled by default for privacy. Users
-        # who want it (e.g. to automate per-card charging limits) can
-        # enable it manually in the entity settings.
+    FoxESSSensorDescription(
+        key="rfid_card", name="RFID Card", translation_key="rfid_card",
+        icon="mdi:card-account-details",
+        # Card IDs are personal; enable it to automate per card.
         entity_registry_enabled_default=False,
-        value_fn=lambda d: f"{d.get('rfid_card',0):08X}" if d.get("rfid_card", 0) > 0 else "None",
+        value_fn=_rfid,
     ),
-    # ── Session history ───────────────────────────────────────────────────────
-    # Derived by the coordinator from status transitions - the charger itself
-    # stores none of this. current_energy resets each session and stop_reason
-    # is overwritten before anyone sees it.
-    FoxESSChargerSensorDescription(
+    # The last completed session, as recorded by the coordinator's session
+    # tracker: the charger keeps none of this (its session counter restarts
+    # and the stop reason is overwritten).
+    FoxESSSensorDescription(
         key="last_session_energy", name="Last Session Energy",
-        translation_key="last_session_energy",
+        translation_key="last_session_energy", icon="mdi:history",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        icon="mdi:history",
-        # Deliberately NOT total_increasing: this is a per-session figure that
-        # goes up and down between sessions, not a cumulative counter. Marking
-        # it as a total would feed nonsense into long-term statistics.
-        value_fn=lambda d: (d.get("last_session") or {}).get("energy_kwh"),
-        attrs_fn=lambda d: d.get("last_session") or {},
+        # No state class: a per-session figure moves both ways between
+        # sessions and must not feed long-term statistics as a total.
+        value_fn=_last_session("energy_kwh"),
+        attrs_fn=lambda data: data.get("last_session") or {},
     ),
-    FoxESSChargerSensorDescription(
+    FoxESSSensorDescription(
         key="last_session_duration", name="Last Session Duration",
-        translation_key="last_session_duration",
+        translation_key="last_session_duration", icon="mdi:timer-outline",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
-        icon="mdi:timer-outline",
-        value_fn=lambda d: (d.get("last_session") or {}).get("duration_min"),
+        value_fn=_last_session("duration_min"),
     ),
-    # ── Diagnostics ───────────────────────────────────────────────────────────
-    # An earlier transport desync was invisible until it had already
-    # corrupted long-term statistics. Non-zero and climbing here means it is
-    # happening again; flat zero means the transport fixes are holding.
-    #
-    # MEASUREMENT, not TOTAL_INCREASING. The
-    # underlying counters (txid_mismatches et al. on FoxESSModbusClient) are
-    # plain in-memory instance attributes - FoxESSModbusClient is recreated
-    # from scratch in async_setup_entry on every integration reload (options
-    # change, HA restart, manual reload), so this value legitimately drops
-    # back to zero at that point, not just increases. HA's recorder treats a
-    # TOTAL_INCREASING sensor's drop as a meter rollover and folds the old
-    # value back into the cumulative sum, which would silently inflate this
-    # sensor's long-term statistics by however many errors had accumulated
-    # before the reload - the opposite of what a diagnostic counter should
-    # do. Persisting the counters across reloads (the alternative fix) was
-    # considered but left out of this pass: it would mean either extending
-    # the 2.2.0 session Store's schema or adding a third Store solely for
-    # transport counters, and diagnostics-only state surviving a reload
-    # isn't worth that persistence-layer footprint - MEASUREMENT already
-    # correctly represents "this process's error count since it last
-    # started", which is exactly what the value actually is.
-    FoxESSChargerSensorDescription(
-        key="transport_errors", name="Transport Errors",
-        translation_key="transport_errors",
-        icon="mdi:lan-disconnect",
-        entity_category=EntityCategory.DIAGNOSTIC,
+    # Modbus framing problems since the integration last (re)loaded. A
+    # transport desync once went unnoticed until it had corrupted long-term
+    # statistics; a climbing count here is the early warning. MEASUREMENT,
+    # not TOTAL_INCREASING: the counters live in memory and restart at 0 on
+    # every reload, which the recorder would otherwise treat as a meter
+    # rollover and add to the sum again.
+    FoxESSSensorDescription(
+        key="transport_errors", name="Transport Errors", translation_key="transport_errors",
+        icon="mdi:lan-disconnect", entity_category=EntityCategory.DIAGNOSTIC,
         state_class=SensorStateClass.MEASUREMENT,
-        # Not tied to any single register block - these are the Modbus
-        # client's own transport counters, updated every poll regardless of
-        # which blocks succeeded or failed.
-        block=None,
-        value_fn=lambda d: (
-            d.get("diag_txid_mismatches", 0)
-            + d.get("diag_short_reads", 0)
-            + d.get("diag_connection_errors", 0)
-            + d.get("diag_malformed_headers", 0)
-            + d.get("diag_unit_id_mismatches", 0)
-            + d.get("diag_write_echo_mismatches", 0)
-        ),
-        attrs_fn=lambda d: {
-            "txid_mismatches":     d.get("diag_txid_mismatches", 0),
-            "short_reads":         d.get("diag_short_reads", 0),
-            "connection_errors":   d.get("diag_connection_errors", 0),
-            "malformed_headers":   d.get("diag_malformed_headers", 0),
-            "unit_id_mismatches":  d.get("diag_unit_id_mismatches", 0),
-            "write_echo_mismatches": d.get("diag_write_echo_mismatches", 0),
-            # Not counted into the sensor's own value_fn total above: a late
-            # reply to an abandoned request being discarded is the transport
-            # coping with a slow charger, not a framing failure. Non-zero
-            # here is expected on a slow link; climbing is only worth
-            # attention alongside a rising total above.
-            "stale_replies":       d.get("diag_stale_replies", 0),
-            "energy_rejections":   d.get("diag_energy_rejections", 0),
-            # Controller counters (3.x). The 2.4.3 names below have no
-            # producer in this controller: unknown (None), never a made-up 0.
-            "refreshes":           d.get("diag_refreshes"),
-            "refresh_failures":    d.get("diag_refresh_failures"),
-            "stop_fallbacks":      d.get("diag_stop_fallbacks"),
-            "persist_failures":    d.get("diag_persist_failures"),
-            "setpoint_reasserts":  d.get("diag_setpoint_reasserts"),
-            "setpoint_drift_events": d.get("diag_setpoint_drift_events"),
-            "heartbeat_write_failures": d.get("diag_heartbeat_write_failures"),
-            "stop_pending": d.get("diag_stop_pending"),
-            "stop_write_failures": d.get("diag_stop_write_failures"),
-            "stop_retries": d.get("diag_stop_retries"),
-            # Full context on each rejected energy read, so a recorder
-            # correction can be computed rather than guessed at later.
-            "recent_energy_rejections": d.get("energy_rejection_log", []),
-        },
+        block=None,  # client counters, updated whichever blocks were read
+        value_fn=_transport_errors,
+        attrs_fn=_transport_details,
     ),
 )
 
+
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry,
+    hass: HomeAssistant,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: FoxESSChargerCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    async_add_entities([
-        FoxESSChargerSensor(coordinator, desc, entry) for desc in SENSORS
-    ])
+    """Create one entity per sensor description."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    async_add_entities(
+        [FoxESSChargerSensor(coordinator, description, entry) for description in SENSORS]
+    )
 
 
 class FoxESSChargerSensor(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SensorEntity):
-    _attr_has_entity_name = True
-    entity_description: FoxESSChargerSensorDescription
+    """A sensor whose state is computed from the latest observation."""
 
-    def __init__(self, coordinator: FoxESSChargerCoordinator,
-                 description: FoxESSChargerSensorDescription, entry: ConfigEntry) -> None:
+    _attr_has_entity_name = True
+    entity_description: FoxESSSensorDescription
+
+    def __init__(
+        self,
+        coordinator: FoxESSChargerCoordinator,
+        description: FoxESSSensorDescription,
+        entry: ConfigEntry,
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
@@ -485,34 +424,23 @@ class FoxESSChargerSensor(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Senso
 
     @property
     def native_value(self) -> StateType:
-        if not (self.coordinator.data and self.entity_description.value_fn):
+        data = self.coordinator.data
+        if not data:
             return None
-        value = self.entity_description.value_fn(self.coordinator.data)
-        desc = self.entity_description
-        if (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and (desc.min_plausible is not None or desc.max_plausible is not None
-                 or desc.capability_key is not None)
-        ):
-            lo = desc.min_plausible if desc.min_plausible is not None else float("-inf")
-            if desc.capability_key is not None:
-                model = self.coordinator.data.get("id_model_code")
-                rated = get_capabilities(model)[desc.capability_key]
-                hi = rated * desc.capability_margin
-            else:
-                hi = desc.max_plausible if desc.max_plausible is not None else float("inf")
-            if not (lo <= value <= hi):
-                _LOGGER.warning(
-                    "%s: implausible reading %s (expected %s to %s) - "
-                    "reporting unavailable rather than a physically impossible value",
-                    desc.key, value, lo, hi,
-                )
-                return None
-        return value
+        description = self.entity_description
+        value = description.value_fn(data)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return value
+        limits = description.valid_range(data)
+        if limits is None or limits[0] <= value <= limits[1]:
+            return value
+        _LOGGER.warning(
+            "%s: implausible reading %s (accepted range %s to %s); reporting "
+            "it as unknown instead", description.key, value, *limits,
+        )
+        return None
 
     @property
     def extra_state_attributes(self) -> dict:
-        if self.coordinator.data:
-            return self.entity_description.attrs_fn(self.coordinator.data)
-        return {}
+        data = self.coordinator.data
+        return self.entity_description.attrs_fn(data) if data else {}
