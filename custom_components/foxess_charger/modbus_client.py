@@ -18,18 +18,21 @@ from __future__ import annotations
 
 import logging
 import socket
+import struct
 import threading
 import time
 
 _LOGGER = logging.getLogger(__name__)
 
-# ── Modbus Function Codes ─────────────────────────────────────────────────────
-FC_READ_HOLDING     = 0x03   # read R/W and read-only registers
-FC_WRITE_SINGLE     = 0x06   # write the write-only command registers (0x4000–0x4003)
-FC_WRITE_MULTIPLE   = 0x10   # write R/W config registers (0x3000–0x300B)
+# Function codes used with this charger.
+FC_READ_HOLDING = 0x03     # Read Holding Registers: telemetry and settings alike
+FC_WRITE_SINGLE = 0x06     # Write Single Register: the command registers only
+FC_WRITE_MULTIPLE = 0x10   # Write Multiple Registers, always with a quantity of 1
+EXCEPTION_FLAG = 0x80      # added to the function code of an exception reply
 
-# Write-only registers accept FC06 only; everything else is written with FC16.
-WRITE_ONLY_REGISTERS = {0x4000, 0x4001, 0x4002, 0x4003}
+# The 0x4000-0x4003 command registers only accept FC06; every other register
+# is written with FC16.
+COMMAND_REGISTERS = frozenset(range(0x4000, 0x4004))
 
 # MBAP header is always exactly 7 bytes: Transaction ID(2) + Protocol ID(2) +
 # Length(2) + Unit ID(1). The Length field counts everything *after* itself,
@@ -106,7 +109,7 @@ def _check_u16(name: str, value: int) -> None:
 
 
 class FoxESSModbusClient:
-    """Minimal Modbus TCP client over raw sockets.
+    """Modbus TCP client for one charger, on plain sockets (no pymodbus).
 
     Holds one persistent TCP connection reused across calls; a poll issues
     several reads and reconnecting for each would load the charger's embedded
@@ -222,16 +225,14 @@ class FoxESSModbusClient:
         """
         return 0 < (sent_tid - got_tid) % 0x10000 < 0x8000
 
-    def _build_mbap(self, pdu: bytes) -> bytes:
-        tid     = self._next_tid()
-        length  = 1 + len(pdu)
-        return (
-            tid.to_bytes(2, "big")
-            + (0).to_bytes(2, "big")
-            + length.to_bytes(2, "big")
-            + self._slave_id.to_bytes(1, "big")
-            + pdu
-        )
+    def _frame(self, pdu: bytes) -> bytes:
+        """``pdu`` behind an MBAP header with a fresh transaction ID.
+
+        Header: transaction ID, protocol ID (always 0), the byte count of
+        what follows it (unit ID + PDU), then the unit ID itself.
+        """
+        header = struct.pack(">HHH", self._next_tid(), 0, len(pdu) + 1)
+        return header + self._slave_id.to_bytes(1, "big") + pdu
 
     def _fail(self, message: str, *, sent: bool, counter: str | None = None,
               level: int = logging.WARNING, close: bool = True) -> ModbusNoResponse:
@@ -259,7 +260,7 @@ class FoxESSModbusClient:
         deadline, for a reply that actually matches.
         """
         deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
-        request = self._build_mbap(pdu)
+        request = self._frame(pdu)
         sent_tid = int.from_bytes(request[:2], "big")
         sent = False
         try:
@@ -327,16 +328,8 @@ class FoxESSModbusClient:
     def _check_exception(self, response: bytes, function_code: int, address: int) -> None:
         """Raises ModbusExceptionResponse for a well-formed exception reply to
         our own function code. The exception PDU is exactly 2 bytes."""
-        if len(response) == 9 and response[7] == (function_code | 0x80):
+        if len(response) == 9 and response[7] == (function_code | EXCEPTION_FLAG):
             raise ModbusExceptionResponse(function_code, response[8], address)
-
-    def _send_recv(self, pdu: bytes, timeout: float = DEFAULT_TRANSACTION_TIMEOUT) -> bytes | None:
-        """Legacy helper: complete validated frame, or None on any failure."""
-        with self._lock:
-            try:
-                return self._transact(pdu, timeout)
-            except ModbusNoResponse:
-                return None
 
     # ── Strict API ────────────────────────────────────────────────────────────
 
@@ -368,9 +361,9 @@ class FoxESSModbusClient:
                     f"FC03 @ 0x{address:04X}: byte_count {byte_count} inconsistent "
                     f"(frame {len(response)} bytes, requested {count} registers)",
                     sent=True, counter="short_reads")
-        payload = response[9:]
-        registers = [int.from_bytes(payload[i:i + 2], "big") for i in range(0, byte_count, 2)]
-        _LOGGER.debug("FC03 Read 0x%04X count=%d → %s", address, count, registers)
+        # The checks above guarantee exactly `count` big-endian words follow.
+        registers = list(struct.unpack(f">{count}H", response[9:]))
+        _LOGGER.debug("Read %d register(s) from 0x%04X: %s", count, address, registers)
         return registers
 
     def write_register_strict(
@@ -386,7 +379,7 @@ class FoxESSModbusClient:
         """
         _check_u16("address", address)
         _check_u16("value", value)
-        if address in WRITE_ONLY_REGISTERS:
+        if address in COMMAND_REGISTERS:
             fc = FC_WRITE_SINGLE
             pdu = bytes([fc]) + address.to_bytes(2, "big") + value.to_bytes(2, "big")
             expected_echo = pdu
@@ -417,18 +410,20 @@ class FoxESSModbusClient:
         try:
             return self.read_registers_strict(address, count)
         except ModbusExceptionResponse as ex:
-            (_LOGGER.debug if quiet else _LOGGER.error)(
-                "Modbus FC03 Exception 0x%02X @ 0x%04X", ex.code, address)
+            log = _LOGGER.debug if quiet else _LOGGER.error
+            log("Charger refused reading 0x%04X (Modbus exception 0x%02X)", address, ex.code)
             return None
         except ModbusNoResponse:
             return None
 
     def read_uint32(self, address: int) -> int | None:
-        """Reads a big-endian UINT32 from two consecutive registers."""
-        regs = self.read_registers(address, 2)
-        if regs and len(regs) >= 2:
-            return (regs[0] << 16) | regs[1]
-        return None
+        """Unsigned 32-bit value held in `address` (high word) and the
+        register after it (low word); None if the read failed."""
+        words = self.read_registers(address, 2)
+        if not words or len(words) < 2:
+            return None
+        high, low = words[0], words[1]
+        return high << 16 | low
 
     def read_ascii(self, address: int, reg_count: int) -> str | None:
         """Reads `reg_count` registers as ASCII (two chars per register,
@@ -439,17 +434,19 @@ class FoxESSModbusClient:
         return decode_ascii(regs)
 
     def write_holding_register(self, address: int, value: int) -> bool:
-        """Writes one register (FC06 for 0x4000–0x4003, FC16 otherwise).
-        True only for a correctly echoed acknowledgement."""
+        """`write_register_strict` with a yes/no answer: True only when the
+        charger acknowledged the write with a correct echo."""
         try:
             self.write_register_strict(address, value)
-            return True
         except ModbusExceptionResponse as ex:
-            _LOGGER.error("FC%02X Exception 0x%02X @ 0x%04X value=%d",
-                          ex.function_code, ex.code, address, value)
+            _LOGGER.error(
+                "Charger refused writing %d to 0x%04X (FC 0x%02X, Modbus exception 0x%02X)",
+                value, address, ex.function_code, ex.code,
+            )
             return False
         except ModbusNoResponse:
             return False
+        return True
 
     def disconnect(self) -> None:
         """Closes the persistent connection; waits for any in-flight transaction."""
