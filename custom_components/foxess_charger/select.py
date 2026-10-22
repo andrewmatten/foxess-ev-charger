@@ -1,4 +1,8 @@
-"""Select entities for FoxESS EV Charger."""
+"""Select platform: work mode and (phase-switch box) phase selection.
+
+Each select shows one enum register and changes it through the controller,
+which confirms the new value by reading the charger back.
+"""
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
@@ -8,76 +12,105 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    BLOCK_CONFIG, BLOCK_STATUS, DOMAIN, PHASE_SEQ_MAP, REG_PHASE_SWITCHING,
-    REG_WORK_MODE, WORK_MODE_SELECT_OPTIONS, decode_enum,
-)
-from .__init__ import FoxESSChargerCoordinator, FoxESSBlockAvailabilityMixin, build_device_info
+from . import FoxESSBlockAvailabilityMixin, FoxESSChargerCoordinator, build_device_info
 from .adapter_api import ControlError
+from .const import (
+    BLOCK_CONFIG,
+    BLOCK_STATUS,
+    DOMAIN,
+    PHASE_SEQ_MAP,
+    REG_PHASE_SWITCHING,
+    REG_WORK_MODE,
+    WORK_MODE_SELECT_OPTIONS,
+    decode_enum,
+)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry,
+    hass: HomeAssistant,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Create the work mode and phase selects."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    async_add_entities([
-        FoxESSWorkModeSelect(coordinator, entry),
-        FoxESSPhaseSelect(coordinator, entry),
-    ])
+    async_add_entities(
+        [FoxESSWorkModeSelect(coordinator, entry), FoxESSPhaseSelect(coordinator, entry)]
+    )
 
 
-class _FoxESSRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SelectEntity):
-    """A select backed by one enum register, written via the controller."""
+class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SelectEntity):
+    """Select over one enum register.
+
+    Subclasses provide the code table (raw value -> option), the register
+    written and the observation key read back. The name is set explicitly,
+    so it is used instead of the translated name: entity IDs and names stay
+    English in every language.
+    """
 
     _attr_has_entity_name = True
-    _options_map: dict[int, str]
-    _data_key: str
+    _codes: dict[int, str]
     _register: int
+    _reading_key: str
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry,
-                 key: str, name: str) -> None:
+                 unique_suffix: str, name: str) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_unique_id = f"{entry.entry_id}_{unique_suffix}"
         self._attr_name = name
-        self._attr_options = list(self._options_map.values())
+        self._attr_options = list(self._codes.values())
         self._attr_device_info = build_device_info(entry, coordinator)
+        self._raw_for_option = {option: raw for raw, option in self._codes.items()}
 
     @property
     def current_option(self) -> str | None:
-        raw = (self.coordinator.data or {}).get(self._data_key)
-        return decode_enum(raw, self._options_map, self._data_key)
+        raw = (self.coordinator.data or {}).get(self._reading_key)
+        return decode_enum(raw, self._codes, self._reading_key)
 
     async def async_select_option(self, option: str) -> None:
-        reverse = {v: k for k, v in self._options_map.items()}
         try:
-            await self.coordinator.controller.async_set_register(self._register, reverse[option])
+            await self.coordinator.controller.async_set_register(
+                self._register, self._raw_for_option[option]
+            )
         except ControlError as err:
-            raise HomeAssistantError(f"FoxESS: failed to set {self.name} to {option}: {err}") from err
+            raise HomeAssistantError(
+                f"FoxESS: failed to set {self.name} to {option}: {err}"
+            ) from err
         await self.coordinator.async_refresh()
         self.async_write_ha_state()
 
 
-class FoxESSWorkModeSelect(_FoxESSRegisterSelect):
+class FoxESSWorkModeSelect(_EnumRegisterSelect):
+    """Controlled / Plug&Charge / Locked. The integration needs Plug&Charge.
+
+    The options keep their original display-style strings because
+    automations select them by value.
+    """
+
     _attr_icon = "mdi:ev-station"
-    _block = BLOCK_CONFIG
     _attr_translation_key = "work_mode_control"
-    _options_map = WORK_MODE_SELECT_OPTIONS
-    _data_key = "work_mode"
+    _block = BLOCK_CONFIG
+    _codes = WORK_MODE_SELECT_OPTIONS
     _register = REG_WORK_MODE
+    _reading_key = "work_mode"
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "work_mode", "Work Mode")
 
 
-class FoxESSPhaseSelect(_FoxESSRegisterSelect):
+class FoxESSPhaseSelect(_EnumRegisterSelect):
+    """Phases to charge on; only meaningful with the phase-switch box.
+
+    Shows the phase sequence from the status block and writes the
+    phase-switching command register.
+    """
+
     _attr_icon = "mdi:electric-switch"
+    _attr_translation_key = "phase_switching_control"
     _attr_entity_registry_enabled_default = False
     _block = BLOCK_STATUS
-    _attr_translation_key = "phase_switching_control"
-    _options_map = PHASE_SEQ_MAP
-    _data_key = "phase_sequence"
+    _codes = PHASE_SEQ_MAP
     _register = REG_PHASE_SWITCHING
+    _reading_key = "phase_sequence"
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "phase_sequence", "Phase Sequence")
