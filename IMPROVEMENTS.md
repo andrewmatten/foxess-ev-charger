@@ -1,0 +1,26 @@
+# Improvement ideas
+
+Noticed during the 3.1.0 clean-room rewrite and deliberately **not** applied
+(that release changes no behaviour). Rough order: most useful first.
+Risk is the chance of upsetting a working install; effort is relative.
+
+| # | What | Why | Risk | Effort |
+|---|------|-----|------|--------|
+| 1 | Add a reconfigure step to the config flow (host/port/unit ID). | Today a new IP means deleting and re-adding the entry, and because unique IDs start with the entry ID that creates a whole new set of entities and loses history. | Low | Small |
+| 2 | Range-check the setup form: port 1-65535, unit ID 0-255 (`vol.Range`). | An out-of-range unit ID or port raises `OverflowError` during the connection probe, so the form fails with an unexpected error instead of a field message. | Low | Small |
+| 3 | Run the pytest suite in CI. | `validate.yml` only runs HACS and hassfest; the 641 tests (incl. the new contract snapshots) only run when someone remembers locally. | None | Small |
+| 4 | Make the 7 real-socket tests run under the HA pytest plugin (conftest fixture that calls `pytest_socket.enable_socket()` for tests marked `enable_socket`). | The plugin's own setup hook re-disables sockets after the marker is processed, so they fail unless run with `-p no:homeassistant`. | None | Small |
+| 5 | Put the status-code sets and raw bounds in one place. Today: `const.SESSION_ACTIVE_STATUSES` {2,3,4}, `protocol.ACTIVE_STATUSES` {2,3,4,9}, `controller.SESSION_STATUS`/`VALID_STATUS`/`PAUSED_STATUS`, a literal `(4, 5, 0, 1)` in `session.py`; current 60-320 in both `controller.py` and `persistence.py`; power max 1000 (controller) vs 220 (persistence). | These feed stop/unplug/pause decisions; copies can drift apart silently. | Low-medium (safety paths; covered by tests) | Medium |
+| 6 | One source for the 60 s firmware validity cap: `const.FIRMWARE_MAX_TIME_VALIDITY` + `get_heartbeat_interval()` are now only used by tests, the controller uses its own `FIRMWARE_EXPIRY_S`/`MAX_REFRESH_S`. | Two definitions of the same hardware fact; the const one no longer drives anything. | Low | Small |
+| 7 | German repair-issue text in `de.json` (`issues.wrong_work_mode`), and drop the dead strings `config.step.user.data.scan_interval` and `config.error.unknown`. | German users get the Work Mode warning in English; the dead strings are never shown. | None | Small |
+| 8 | Add the 60 s service-context window (`FoxESSLongContextMixin`) to the selects. | Numbers and switches have it; a Work Mode change confirmed after >5 s loses the logbook "changed by" attribution. | Low | Small |
+| 9 | Decide on translated names for selects/switches. They set `_attr_name`, so `de.json`'s names for them are never used and their entity IDs/names stay English in every language. | Consistency; but switching changes German entity IDs for new installs and names for existing ones, so it needs a release note. | Medium (German users) | Small |
+| 10 | Show unknown instead of 0 when a scaled register is missing (voltages/currents/power read a missing key as 0, ambient as -50 °C then rejected), and return unknown rather than `False` for Auto Phase Switch with no reading. | Matches the "unknown is never off/zero" rule used elsewhere; today a missing key can show 0.0 V. | Low (visible state change) | Small |
+| 11 | RFID Card shows the string `"None"` when no card is present; Software Version raises `TypeError` if its register value is `None`. | Odd state value; a crash path only reachable with corrupt data. | Low (`"None"` is user-visible) | Small |
+| 12 | Move `FoxESSBlockAvailabilityMixin`, `FoxESSLongContextMixin` and `build_device_info` into an `entity.py` module (HA convention), re-exported from `__init__`. | Platforms would no longer import the package module; clearer layering. | Low | Small |
+| 13 | `hass.data[DOMAIN][entry_id]` -> `entry.runtime_data`. | Current HA pattern, typed, cleaned up by HA. Needs HA >= 2024.4, i.e. raising `hacs.json`'s 2024.1.0 minimum (which no test currently exercises anyway). | Low | Small |
+| 14 | `controller.py`: split `async_initialize` (restore / adopt / safety config) and pull the wire decision out of `_op_refresh` into a pure function. | Both are long, branchy, safety-critical methods; a pure "what goes on the wire for this observation" function is easy to table-test. | Medium (core control path) | Medium |
+| 15 | `controller.REGISTER_ALLOWLIST` accepts Command Time Validity 1-3600 s while the entity offers 10-255 s. | Align the controller's bound with what the UI (and the firmware) actually support. | Low | Small |
+| 16 | Remove duplicate helpers/tables: `_is_int` (controller, protocol, persistence), `_check_u16` (modbus_client, transport), `coordinator.BLOCK_KEYS`/`TRANSPORT_COUNTERS` vs `protocol` block fields / `transport.CLIENT_COUNTERS`. | Less to keep in sync. | Low | Small |
+| 17 | Fix stale docs: `device_trigger.py` and `energy_guard.py` docstrings still describe 2.x internals (`_track_session()`, `_fetch()`, `_sanitize_energy`); `tests/conftest.py` still describes the old content-in-root symlink layout. | Misleading for the next reader. | None | Small |
+| 18 | Legacy client API (`read_uint32`, `read_ascii`, `write_holding_register`) is only used by tests/fakes; the config flow could use the strict API too. | Smaller surface in `modbus_client.py`. | Low | Small |
