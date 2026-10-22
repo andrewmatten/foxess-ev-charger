@@ -365,6 +365,18 @@ ENERGY_GUARDS = {
 
 MAX_ENERGY_REJECTION_RECORDS = 20
 
+# Hardware counter reset recovery for non-decreasing counters (3.0.7).
+# A lower reading is only treated as a genuine charger counter reset (not
+# corruption) once it has been seen consistently - same value or rising
+# from the new base, each step rate-plausible - for at least this many
+# consecutive polls AND at least this many seconds. At the ~13 s poll
+# interval 600 s is ~46 polls, so the poll count is a floor for fast polling.
+ENERGY_RESET_MIN_POLLS = 20
+ENERGY_RESET_MIN_SECONDS = 600
+# "Rejected implausible ... read" is logged at WARNING at most once per key
+# per this many seconds; further rejections log at DEBUG.
+ENERGY_REJECT_WARN_INTERVAL_S = 3600
+
 # ── Per-block freshness (added 2.2.0) ─────────────────────────────────────────
 # Identifies which of the three independent register reads in _fetch() a
 # given entity's data comes from. Previously every entity trusted HA's

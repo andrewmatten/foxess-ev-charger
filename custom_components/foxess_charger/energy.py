@@ -5,6 +5,13 @@ window and the rejection log; energy_guard.py decides whether each raw
 reading is plausible. Baselines persist as ``{key: {"raw", "wall_ts"}}``
 (the 2.4.3 ``_energy_baseline`` schema) so the first reading after a
 restart is rate-checked against the last good value rather than trusted.
+
+A non-decreasing counter that drops and stays low (a real hardware counter
+reset, e.g. after a charger reboot) is recovered with a persisted
+``offset`` (raw units): exposed = raw + offset, so the published value
+carries on from the last good one and never goes backwards. ``raw`` in the
+baseline is the exposed (offset-adjusted) value; a missing ``offset`` is 0,
+so older stores load unchanged.
 """
 from __future__ import annotations
 
@@ -14,7 +21,9 @@ import time
 from typing import Callable
 
 from .const import (
-    ENERGY_GUARDS, ENERGY_QUANTUM_KWH, MAX_ENERGY_REJECTION_RECORDS, get_capabilities,
+    ENERGY_GUARDS, ENERGY_QUANTUM_KWH, ENERGY_REJECT_WARN_INTERVAL_S,
+    ENERGY_RESET_MIN_POLLS, ENERGY_RESET_MIN_SECONDS, MAX_ENERGY_REJECTION_RECORDS,
+    get_capabilities,
 )
 from .energy_guard import (
     ENERGY_WINDOW_SECONDS, NEAR_ZERO_RAW_UNITS, check_cumulative_window,
@@ -35,6 +44,11 @@ class EnergyTracker:
         self._wall = wall_clock
         self._last: dict[str, tuple[int, float]] = {}
         self._window: dict[str, list[tuple[float, int]]] = {}
+        # Raw-unit offset added to the charger's reading (see module docstring).
+        self._offset: dict[str, int] = {}
+        # In-progress suspected counter reset: first/last raw + ts, poll count.
+        self._reset_candidate: dict[str, dict] = {}
+        self._last_warned: dict[str, float] = {}
         self.rejections: list[dict] = []
         self.dirty = False
 
@@ -43,13 +57,17 @@ class EnergyTracker:
         for key, entry in stored.items():
             elapsed = max(now_wall - entry["wall_ts"], 0.0)
             self._last[key] = (entry["raw"], now_mono - elapsed)
+            if entry.get("offset"):
+                self._offset[key] = entry["offset"]
 
     def export(self) -> dict[str, dict]:
         now_mono, now_wall = self._clock(), self._wall()
-        return {
-            key: {"raw": raw, "wall_ts": now_wall - (now_mono - ts)}
-            for key, (raw, ts) in self._last.items()
-        }
+        out = {}
+        for key, (raw, ts) in self._last.items():
+            out[key] = {"raw": raw, "wall_ts": now_wall - (now_mono - ts)}
+            if self._offset.get(key):
+                out[key]["offset"] = self._offset[key]
+        return out
 
     def last_good(self, key: str) -> int | None:
         entry = self._last.get(key)
@@ -69,7 +87,9 @@ class EnergyTracker:
                     data[key] = last
                 continue
             accepted = self._sanitize(key, raw, data, session_boundary)
-            if accepted is None:
+            if accepted is not None:
+                data[key] = accepted        # raw + offset
+            else:
                 last = self.last_good(key)
                 if last is None:
                     data.pop(key, None)
@@ -87,13 +107,24 @@ class EnergyTracker:
         prev_entry = self._last.get(key)
         prev, prev_ts = prev_entry if prev_entry is not None else (None, None)
         max_power_kw = self._max_power_kw(data)
+        raw_in = raw
+        raw = raw_in + self._offset.get(key, 0)      # offset-adjusted from here on
         decision = decide_energy_reading(
             key, raw, prev, prev_ts, now, max_power_kw, allow_decrease,
             session_boundary=session_boundary,
         )
         if not decision.accepted:
+            if (not allow_decrease and prev is not None and raw < prev
+                    and self._track_counter_reset(key, raw_in, prev, now, max_power_kw)):
+                # Confirmed hardware reset: offset updated, value carries on.
+                raw = raw_in + self._offset[key]
+                self._window[key] = [(now, raw)]
+                self.dirty = True
+                self._last[key] = (raw, now)
+                return raw
             self._reject(key, prev, raw, decision)
             return None
+        self._reset_candidate.pop(key, None)
 
         if allow_decrease and (session_boundary or raw <= NEAR_ZERO_RAW_UNITS):
             # A counter reset is not rate evidence; restart the window.
@@ -124,6 +155,38 @@ class EnergyTracker:
         self._last[key] = (raw, now)
         return raw
 
+    def _track_counter_reset(self, key: str, raw_in: int, prev: int, now: float,
+                             max_power_kw: float) -> bool:
+        """Records one lower-than-last-good read of a non-decreasing counter.
+
+        Returns True once the same/rising low value has persisted for the
+        configured polls and time: the offset is then set so the exposed
+        value continues from ``prev`` plus whatever the counter has counted
+        since the first low read."""
+        cand = self._reset_candidate.get(key)
+        step_ok = False
+        if cand is not None and raw_in >= cand["last_raw"]:
+            step_ok = decide_energy_reading(
+                key, raw_in, cand["last_raw"], cand["last_ts"], now, max_power_kw, False,
+            ).accepted
+        if step_ok:
+            cand.update(last_raw=raw_in, last_ts=now, polls=cand["polls"] + 1)
+        else:
+            cand = {"first_raw": raw_in, "first_ts": now, "last_raw": raw_in,
+                    "last_ts": now, "polls": 1}
+            self._reset_candidate[key] = cand
+        if cand["polls"] < ENERGY_RESET_MIN_POLLS or now - cand["first_ts"] < ENERGY_RESET_MIN_SECONDS:
+            return False
+        self._offset[key] = prev - cand["first_raw"]
+        del self._reset_candidate[key]
+        _LOGGER.warning(
+            "%s counter reset accepted: charger now reports %d (%.1f kWh) after "
+            "%.1f kWh; carrying on from the last good value with an offset of %.1f kWh",
+            key, raw_in, raw_in * ENERGY_QUANTUM_KWH, prev * ENERGY_QUANTUM_KWH,
+            self._offset[key] * ENERGY_QUANTUM_KWH,
+        )
+        return True
+
     def _reject(self, key: str, prev: int | None, raw: int, decision) -> None:
         self.rejections.append({
             "at": datetime.now(timezone.utc).isoformat(),
@@ -137,7 +200,13 @@ class EnergyTracker:
             "max_plausible_kwh": decision.max_plausible_kwh,
         })
         del self.rejections[:-MAX_ENERGY_REJECTION_RECORDS]
-        _LOGGER.warning(
+        now = self._clock()
+        last_warned = self._last_warned.get(key)
+        warn = last_warned is None or now - last_warned >= ENERGY_REJECT_WARN_INTERVAL_S
+        if warn:
+            self._last_warned[key] = now
+        _LOGGER.log(
+            logging.WARNING if warn else logging.DEBUG,
             "Rejected implausible %s read: raw=%d (prev=%s, delta=%.2f kWh over %.0fs, "
             "max plausible=%.2f kWh) - keeping last known-good value",
             key, raw, prev, decision.delta_kwh, decision.elapsed_s,

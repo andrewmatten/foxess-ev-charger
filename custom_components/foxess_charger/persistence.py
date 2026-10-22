@@ -329,7 +329,13 @@ class ChargerStorage:
             if not (_is_int(raw) and raw >= 0 and _is_number(wall)):
                 issues.append(f"energy_baseline_malformed:{key}")
                 continue
+            offset = entry.get("offset", 0)
+            if not _is_int(offset):
+                issues.append(f"energy_baseline_malformed:{key}")
+                continue
             out[key] = {"raw": raw, "wall_ts": float(wall)}
+            if offset:
+                out[key]["offset"] = offset
         return out
 
     # ── saving ───────────────────────────────────────────────────────────

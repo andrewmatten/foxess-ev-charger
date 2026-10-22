@@ -174,6 +174,12 @@ class SessionTracker:
             if delta >= 0:
                 energy_raw = delta
         end_current = data.get("current_energy_raw")
+        if energy_raw == 0 and isinstance(self.start_current, int) \
+                and isinstance(end_current, int) and end_current > self.start_current:
+            # The lifetime counter did not move but the per-session counter
+            # did (total held by the energy guard, or the register is stuck):
+            # trust the per-session delta rather than report 0.
+            energy_raw = end_current - self.start_current
         if energy_raw is None and isinstance(self.start_current, int) \
                 and isinstance(end_current, int) and end_current >= self.start_current:
             # No lifetime delta: fall back to the per-session counter's delta.

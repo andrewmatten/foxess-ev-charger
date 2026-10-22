@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.7 - 2026-10-22
+
+- Fixed: Total Energy frozen after a charger counter reset. If the charger's lifetime counter drops (for example after a reboot: 801.3 kWh to 142.7 kWh on 14 Oct) and stays at the lower value, it was rejected on every poll forever. A lower reading seen consistently (same or rising, rate-plausible, for at least 20 polls and 10 minutes) is now accepted as a hardware reset. A saved offset keeps Total Energy carrying on from the last good value, so it never goes backwards. One warning is logged when a reset is accepted. Single or scattered low reads are still rejected, and the other plausibility checks apply to the offset-adjusted value. The offset is saved with the energy baseline; older saved files load unchanged.
+- The "Rejected implausible ... read" warning is now logged at most once per counter per hour (debug otherwise). Diagnostics still record every rejection.
+- Last Session Energy uses the per-session counter's change when the lifetime counter did not move during the session (previously reported 0).
+
 ## 3.0.6 - 2026-10-17
 
 - No behaviour change. Packaging for the HACS default store: brand icons, HACS and hassfest validation, sorted manifest keys, GitHub Issues enabled.
