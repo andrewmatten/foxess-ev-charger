@@ -1,36 +1,50 @@
-"""Constants for FoxESS EV Charger integration."""
+"""Constants shared across the FoxESS EV Charger integration.
+
+Three groups live here: config-entry keys and defaults, the charger's Modbus
+register map with the code tables used to decode it, and tuning values the
+coordinator, controller and energy guard share. Register addresses, word
+counts, units and enum codes are protocol facts; the notes beside them record
+where real hardware was seen to behave differently from the documentation.
+"""
+from __future__ import annotations
+
 import logging
 
-from homeassistant.const import Platform
-
-_LOGGER = logging.getLogger(__name__)
+from homeassistant.const import (  # noqa: F401 - CONF_HOST/CONF_PORT re-exported
+    CONF_HOST,
+    CONF_PORT,
+    Platform,
+)
 
 # ENERGY_QUANTUM_KWH / ENERGY_GUARD_SAFETY_FACTOR live in energy_guard.py
 # alongside the pure decide_energy_reading() function that actually uses
 # them, so the guard's threshold constants and its decision logic can't
 # drift apart into two copies again. Re-exported here for backward
 # compatibility with existing imports from this module.
-from .energy_guard import ENERGY_QUANTUM_KWH, ENERGY_GUARD_SAFETY_FACTOR  # noqa: F401
+from .energy_guard import ENERGY_GUARD_SAFETY_FACTOR, ENERGY_QUANTUM_KWH  # noqa: F401
+
+_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "foxess_charger"
 
-PLATFORMS = [
-    Platform.SENSOR,
-    Platform.BINARY_SENSOR,
-    Platform.NUMBER,
-    Platform.SELECT,
-    Platform.SWITCH,
+# Entity platforms, set up in this order.
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR, Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SELECT, Platform.SWITCH,
 ]
 
-# Config Keys
-CONF_HOST     = "host"
-CONF_PORT     = "port"
+# ── Config entry ─────────────────────────────────────────────────────────────
+# Existing entries store host/port/slave_id under exactly these keys (host and
+# port are HA's own CONF_HOST/CONF_PORT); scan_interval lives in the options.
 CONF_SLAVE_ID = "slave_id"
 
-# Defaults
-DEFAULT_PORT          = 502
-DEFAULT_SLAVE_ID      = 1
-DEFAULT_SCAN_INTERVAL = 10
+DEFAULT_PORT = 502            # standard Modbus TCP port; the charger listens here
+DEFAULT_SLAVE_ID = 1          # Modbus unit ID
+DEFAULT_SCAN_INTERVAL = 10    # seconds between polls; the options flow allows 5-300
+
+# ── Register map ─────────────────────────────────────────────────────────────
+# Each address is one 16-bit register. The note beside it gives the raw unit
+# ("0.1 A" = tenths of an amp); UINT32 values span two registers, high word
+# first.
 
 # Single batched FC03 read covering the whole status+energy+fault+RFID block
 # (0x1000–0x101D inclusive, 30 registers) - confirmed safe on single-phase
@@ -42,85 +56,90 @@ DEFAULT_SCAN_INTERVAL = 10
 REG_STATUS_BLOCK_START = 0x1000
 REG_STATUS_BLOCK_COUNT = 30  # 0x1000..0x101D inclusive
 
-# ── Read-Only Input Registers (0x1000–0x1022) ─────────────────────────────────
-REG_DEVICE_ADDRESS  = 0x1000
-REG_SOFTWARE_VER    = 0x1001
-REG_STOP_REASON     = 0x1002
-REG_STATUS          = 0x1003
-REG_CP_STATUS       = 0x1004
-REG_CC_STATUS       = 0x1005
-REG_PORT_TEMP       = 0x1006
-REG_AMBIENT_TEMP    = 0x1007
-REG_L1_VOLTAGE      = 0x1008
-REG_L2_VOLTAGE      = 0x1009
-REG_L3_VOLTAGE      = 0x100A
-REG_L1_CURRENT      = 0x100B
-REG_L2_CURRENT      = 0x100C
-REG_L3_CURRENT      = 0x100D
-REG_ACTIVE_POWER    = 0x100E
-REG_LOCK_STATUS     = 0x100F
-REG_PHASE_SEQUENCE  = 0x1010
-REG_MAX_POWER       = 0x1011
-REG_MIN_POWER       = 0x1012
-REG_MAX_CURRENT     = 0x1013
-REG_MIN_CURRENT     = 0x1014
-REG_ALARM_CODE      = 0x1015
+# Read-only telemetry.
+REG_DEVICE_ADDRESS = 0x1000     # device address setting
+REG_SOFTWARE_VER = 0x1001       # firmware: high byte major, low byte minor
+REG_STOP_REASON = 0x1002        # why the last session ended, STOP_REASON_MAP
+REG_STATUS = 0x1003             # charger state, STATUS_MAP
+REG_CP_STATUS = 0x1004          # control pilot level, CP_STATUS_MAP
+REG_CC_STATUS = 0x1005          # cable connection, CC_STATUS_MAP
+REG_PORT_TEMP = 0x1006          # 0.1 °C offset by +50 °C; 65535 = no probe fitted
+REG_AMBIENT_TEMP = 0x1007       # same encoding; sits on the board, not in room air
+REG_L1_VOLTAGE = 0x1008         # phase voltages, 0.1 V each
+REG_L2_VOLTAGE = 0x1009         #   (L2/L3 stay 0 on single-phase units)
+REG_L3_VOLTAGE = 0x100A
+REG_L1_CURRENT = 0x100B         # phase currents, 0.1 A each
+REG_L2_CURRENT = 0x100C
+REG_L3_CURRENT = 0x100D
+REG_ACTIVE_POWER = 0x100E       # power being delivered, 0.1 kW
+REG_LOCK_STATUS = 0x100F        # connector lock, LOCK_STATUS_MAP
+REG_PHASE_SEQUENCE = 0x1010     # phases in use (phase-switch box), PHASE_SEQ_MAP
+REG_MAX_POWER = 0x1011          # supported power range, 0.1 kW
+REG_MIN_POWER = 0x1012
+REG_MAX_CURRENT = 0x1013        # supported current range, 0.1 A
+REG_MIN_CURRENT = 0x1014
+REG_ALARM_CODE = 0x1015         # bitmask, ALARM_BITS
 # These two were swapped until 2.1.2. Confirmed against live hardware: the
 # register at 0x1016 never resets between sessions (lifetime), while 0x1018
 # starts from zero each time charging begins and tracked kW x elapsed time
 # exactly over a 2h13m session. The old mapping made Total read *lower* than
 # the current session, which is impossible.
-REG_TOTAL_ENERGY    = 0x1016  # UINT32 (2 Register) - lifetime, never resets
-REG_CURRENT_ENERGY  = 0x1018  # UINT32 (2 Register) - resets each session
-REG_FAULT_CODE      = 0x101A  # UINT32 (2 Register)
-REG_RFID_CARD       = 0x101C  # UINT32 (2 Register)
-REG_ID_MODEL_CODE   = 0x101E  # ASCII (4 Register / 8 Bytes)
-REG_ID_SERIAL_NUMBER= 0x1022  # ASCII (16 Register / 32 Bytes)
+REG_TOTAL_ENERGY = 0x1016       # UINT32, 0.1 kWh - lifetime, never resets
+REG_CURRENT_ENERGY = 0x1018     # UINT32, 0.1 kWh - restarts at 0 each session
+REG_FAULT_CODE = 0x101A         # UINT32 bitmask, FAULT_BITS
+REG_RFID_CARD = 0x101C          # UINT32, ID of the last card presented
+REG_ID_MODEL_CODE = 0x101E      # ASCII, 4 registers / 8 characters
+REG_ID_SERIAL_NUMBER = 0x1022   # ASCII, 16 registers / 32 characters
 
-# ── Read/Write Holding Registers (0x3000–0x300B) ──────────────────────────────
-REG_WORK_MODE            = 0x3000  # 0=Controlled, 1=Plug&Charge, 2=Locked
-REG_MAX_CHARGING_CURRENT = 0x3001  # 0.1 A, 6–32 A
-REG_MAX_CHARGING_POWER   = 0x3002  # 0.1 kW
-REG_ALLOWED_CHARGE_TIME  = 0x3003  # min
-REG_ALLOWED_CHARGE_ENERGY= 0x3004  # kWh
-REG_TIME_VALIDITY        = 0x3005  # s, originally documented 10-60s - observed
-                                    # behaviour shows this register actually
-                                    # accepts at least 180s. Do not clamp a
-                                    # live-read value down to the old
-                                    # documented range; see number.py's
-                                    # native_max_value for the corrected UI
-                                    # bound and get_heartbeat_interval() below
-                                    # for why the *floor* on the derived
-                                    # heartbeat interval is a separate concern
-                                    # from this register's own valid range.
-REG_DEFAULT_CURRENT      = 0x3006  # 0.1 A, 6–32 A
-REG_AUTO_PHASE_SWITCH    = 0x300A  # 0=off, 1=on
-REG_MIN_SWITCH_INTERVAL  = 0x300B  # min, 5–30
+# Settings, read with FC03 and written with FC16 (one register at a time).
+REG_WORK_MODE = 0x3000              # WORK_MODE_MAP
+REG_MAX_CHARGING_CURRENT = 0x3001   # current cap, 0.1 A (6-32 A)
+REG_MAX_CHARGING_POWER = 0x3002     # power cap, 0.1 kW
+REG_ALLOWED_CHARGE_TIME = 0x3003    # session time limit, minutes; 65535 = none set
+REG_ALLOWED_CHARGE_ENERGY = 0x3004  # session energy limit, kWh; 65535 = none set
+# Command Time Validity, seconds: how long the charger honours the 0x3001/
+# 0x3002 caps before reverting to its maximum. Originally documented 10-60s -
+# observed behaviour shows this register actually accepts at least 180s. Do
+# not clamp a live-read value down to the old documented range; see
+# number.py's native_max_value for the corrected UI bound and
+# get_heartbeat_interval() below for why the *floor* on the derived heartbeat
+# interval is a separate concern from this register's own valid range.
+REG_TIME_VALIDITY = 0x3005
+REG_DEFAULT_CURRENT = 0x3006        # fallback current once the caps lapse, 0.1 A (6-32 A)
+# 0x3007-0x3009 are reserved. The next two only exist with the external
+# phase-switch box; single-phase units refuse to read them.
+REG_AUTO_PHASE_SWITCH = 0x300A      # automatic phase switching, 1 = on
+REG_MIN_SWITCH_INTERVAL = 0x300B    # minimum minutes between switches (5-30)
 
-# ── Write-Only Registers (0x4000–0x4003) ─────────────────────────────────────
-REG_LOCK_CONTROL     = 0x4000  # 0=No action, 1=Unlock, 2=Lock
-REG_CHARGING_CONTROL = 0x4001  # 0=No action, 1=Start, 2=Stop
-REG_PHASE_SWITCHING  = 0x4002  # 0=3-phase, 1=L2, 2=L3
-REG_RESTART          = 0x4003  # 0xA5A5 = Restart
+# Command registers: write-only, FC06.
+REG_LOCK_CONTROL = 0x4000       # 1 = unlock, 2 = lock the connector
+REG_CHARGING_CONTROL = 0x4001   # 1 = start, 2 = stop the session
+REG_PHASE_SWITCHING = 0x4002    # target phases: same codes as PHASE_SEQ_MAP
+REG_RESTART = 0x4003            # writing 0xA5A5 reboots the charger
 
-# ── Status Maps ───────────────────────────────────────────────────────────────
+# ── Code tables ──────────────────────────────────────────────────────────────
+# The names are entity state values (and translation keys): changing one
+# breaks automations and history, so only ever add to these tables.
+
 STATUS_MAP = {
-    0: "idle",
-    1: "connected",
-    2: "start",
-    3: "charging",
-    4: "paused",
-    5: "finished",
-    6: "fault",
-    7: "reserved",
-    8: "locked",
+    0: "idle",        # nothing plugged in
+    1: "connected",   # cable in, no session running
+    2: "start",       # session starting (already counts as active)
+    3: "charging",    # power flowing
+    4: "paused",      # suspended by the vehicle, session still open
+    5: "finished",    # session over
+    6: "fault",       # see fault_code / FAULT_BITS
+    7: "reserved",    # documented but never reported; protocol.py treats it as invalid
+    8: "locked",      # refuses to charge
 }
 
+# Control pilot voltage per IEC 61851: 12 V no vehicle (state A), 9 V vehicle
+# detected (B), 6 V vehicle ready to take power (C).
 CP_STATUS_MAP = {
-    0: "fault",
-    1: "12v_disconnected",
-    2: "9v_connected",
-    3: "6v_ready",
+    0: "fault",             # pilot error
+    1: "12v_disconnected",  # state A
+    2: "9v_connected",      # state B
+    3: "6v_ready",          # state C
 }
 
 # Lowercase snake_case state keys, not the display-cased strings ("Plug&Charge"
@@ -128,8 +147,8 @@ CP_STATUS_MAP = {
 # the Work Mode select's state/option values. State values need to be stable
 # machine identifiers that translations/en.json and de.json's state maps key
 # off of - a display label is not a valid state value (HA enum device
-# classes expect exactly this style, e.g. STATUS_MAP below).
-WORK_MODE_MAP    = {0: "controlled", 1: "plug_and_charge", 2: "locked"}
+# classes expect exactly this style, e.g. STATUS_MAP above).
+WORK_MODE_MAP = {0: "controlled", 1: "plug_and_charge", 2: "locked"}
 
 # The select entity's `options` contract is separate from the sensor's enum
 # states. HA validates select.select_option against entity.options *before*
@@ -146,8 +165,27 @@ WORK_MODE_SELECT_OPTIONS = {0: "Controlled", 1: "Plug&Charge", 2: "Locked"}
 # table-driven for the same reason as the bigger maps above: an unrecognized
 # raw value should surface as unknown, not silently fall through a ternary
 # to whichever label happens to be the "else" branch.
-CC_STATUS_MAP   = {0: "disconnected", 1: "connected"}
+CC_STATUS_MAP = {0: "disconnected", 1: "connected"}
 LOCK_STATUS_MAP = {0: "unlocked", 1: "locked"}
+
+# Lowercase snake_case, matching translations/en.json and de.json's existing
+# phase_sequence/phase_switching_control state keys - "L2_single"/"L3_single"
+# never matched either file's "l2_single_phase"/"l3_single_phase" keys, so
+# those states were always shown untranslated.
+PHASE_SEQ_MAP = {0: "three_phase", 1: "l2_single_phase", 2: "l3_single_phase"}
+
+# 0x1002 stop reason codes, in code order (code 0 first). These names are the
+# Stop Reason sensor's states and the stop_reason recorded with each session.
+_STOP_REASONS = (
+    "none", "command", "time_completed", "s2_timeout", "pause_timeout",
+    "emergency_stop", "cp_abnormal", "connector_pulled", "ac_contactor",
+    "lock_abnormal", "card_reader", "overcurrent", "overvoltage",
+    "undervoltage", "port_overtemp", "leakage", "n_line_reversed",
+    "freq_abnormal", "stop_button", "breaker", "phase_loss", "pe_abnormal",
+    "ext_meter", "ambient_overtemp", "metering_chip", "access_control",
+    "pbox_phase_switch", "energy_limit",
+)
+STOP_REASON_MAP = dict(enumerate(_STOP_REASONS))
 
 # ── Fault/Alarm Bitmasks (Appendix 2 & 3) ──────────────────────────────────────
 # fault_code (0x101A, UINT32) and alarm_code (0x1015, UINT16) are bitmasks -
@@ -244,35 +282,15 @@ def decode_enum(
     return mapping[value]
 
 
-# Lowercase snake_case, matching translations/en.json and de.json's existing
-# phase_sequence/phase_switching_control state keys - "L2_single"/"L3_single"
-# never matched either file's "l2_single_phase"/"l3_single_phase" keys, so
-# those states were always shown untranslated.
-PHASE_SEQ_MAP    = {0: "three_phase", 1: "l2_single_phase", 2: "l3_single_phase"}
-STOP_REASON_MAP  = {
-    0: "none",           1: "command",          2: "time_completed",
-    3: "s2_timeout",     4: "pause_timeout",    5: "emergency_stop",
-    6: "cp_abnormal",    7: "connector_pulled", 8: "ac_contactor",
-    9: "lock_abnormal", 10: "card_reader",      11: "overcurrent",
-    12: "overvoltage",  13: "undervoltage",     14: "port_overtemp",
-    15: "leakage",      16: "n_line_reversed",  17: "freq_abnormal",
-    18: "stop_button",  19: "breaker",          20: "phase_loss",
-    21: "pe_abnormal",  22: "ext_meter",        23: "ambient_overtemp",
-    24: "metering_chip",25: "access_control",   26: "pbox_phase_switch",
-    27: "energy_limit",
-}
-
-# ── Session / setpoint handling (added 2.2.0) ─────────────────────────────────
-STATUS_CHARGING = 3
-
+# ── Sessions ─────────────────────────────────────────────────────────────────
 # Statuses that mean "a session is underway". Pause (4) counts: the car has
 # suspended itself, which is not the same as the session having stopped -
 # same reasoning as FoxESSChargingSwitch.is_on.
 SESSION_ACTIVE_STATUSES = {2, 3, 4}
 
-# Fired by FoxESSChargerCoordinator._track_session() (see __init__.py) the
-# instant a genuine active -> inactive transition ends a session - and only
-# then, never as a side effect of an entity's state being restored/written.
+# Fired by the coordinator when session.SessionTracker completes a logical
+# session - a genuine active -> inactive transition or a confirmed user pause
+# - and never as a side effect of an entity's state being restored/written.
 # device_trigger.py's "session_completed" trigger listens for this event
 # rather than diffing the Last Session Duration sensor's value: a plain
 # state-change trigger looked identical whether a session had genuinely just
@@ -290,6 +308,7 @@ EVENT_SESSION_COMPLETED = f"{DOMAIN}_session_completed"
 # entities must go unavailable rather than keep showing stale values as live.
 MAX_STATUS_READ_FAILURES = 3
 
+# ── Setpoint heartbeat timing ────────────────────────────────────────────────
 # Minimum floor on how often setpoints may be re-written to the charger,
 # regardless of the configured Command Time Validity - every write is
 # Modbus traffic to an embedded stack that has already demonstrated it can
@@ -344,17 +363,7 @@ def get_heartbeat_interval(time_validity: int | float | None) -> float:
     return max(SETPOINT_REASSERT_MIN_INTERVAL, value / 2)
 
 
-# Maps each re-asserted setpoint register to the coordinator.data key it
-# populates on a successful write. Used by __init__.py's
-# _async_send_setpoint (the single write primitive shared by the background
-# heartbeat task, time-driven off get_heartbeat_interval() above, and by
-# async_send_start/async_send_stop) - one table so nothing can disagree on
-# which key means what.
-REASSERTED_DATA_KEYS = {
-    REG_MAX_CHARGING_CURRENT: "max_charging_current_raw",
-    REG_MAX_CHARGING_POWER:   "max_charging_power_raw",
-}
-
+# ── Energy plausibility guard ────────────────────────────────────────────────
 # Per-counter configuration for the energy plausibility guard.
 # total_energy is a lifetime counter, so any decrease is implausible.
 # current_energy legitimately resets to zero at the start of each session.
@@ -378,7 +387,7 @@ ENERGY_RESET_MIN_SECONDS = 600
 ENERGY_REJECT_WARN_INTERVAL_S = 3600
 
 # ── Per-block freshness (added 2.2.0) ─────────────────────────────────────────
-# Identifies which of the three independent register reads in _fetch() a
+# Identifies which of the three independent register reads in a poll a
 # given entity's data comes from. Previously every entity trusted HA's
 # CoordinatorEntity.available default (last_update_success, coordinator-wide)
 # - so one failed block (most commonly 0x300A/0x300B on single-phase
@@ -389,6 +398,14 @@ ENERGY_REJECT_WARN_INTERVAL_S = 3600
 BLOCK_STATUS    = "status"     # 0x1000-0x101D: status/energy/fault/RFID batch
 BLOCK_CONFIG    = "config"     # 0x3000-0x3006: R/W config registers
 BLOCK_PHASE_BOX = "phase_box"  # 0x300A-0x300B: phase-switch-box only
+
+# A block's last successful read must be within this many scan intervals to
+# be considered fresh. 3x mirrors MAX_STATUS_READ_FAILURES's "3 consecutive
+# misses" tolerance for the status block, applied uniformly to all blocks -
+# generous enough to absorb a couple of transient poll failures without
+# flapping entities unavailable, while still catching a block that's
+# genuinely stopped answering.
+BLOCK_STALENESS_FACTOR = 3
 
 # ── Model -> capability table (added 2.2.0) ───────────────────────────────────
 # Rated max power/current used throughout the integration (energy
@@ -438,46 +455,3 @@ def get_capabilities(model_code: str | None) -> dict[str, float]:
             if upper.startswith(prefix):
                 return caps
     return DEFAULT_CAPABILITY
-
-
-# ── Setpoint restoration bounds (added for restart-persisted desired_setpoints) ──
-# The two registers the coordinator re-asserts (see REASSERTED_DATA_KEYS
-# above) each have a minimum that doesn't vary by model (only the maximum
-# does, via MODEL_CAPABILITIES/get_capabilities) - kept here, rather than
-# inline in number.py's NUMBERS descriptions, so that a value restored from
-# storage (see FoxESSChargerCoordinator.async_validate_desired_setpoints in
-# __init__.py) can be bounds-checked against the exact same limits the
-# number entities themselves enforce, without __init__.py importing
-# number.py (circular import: number.py already imports from __init__.py)
-# or the two ever silently drifting apart on what "in range" means.
-SETPOINT_MIN_RAW = {
-    REG_MAX_CHARGING_CURRENT: 60,  # number.py: native_min_value=6.0A
-    REG_MAX_CHARGING_POWER:   0,   # number.py: native_min_value=0.0kW
-}
-
-SETPOINT_CAPABILITY_KEY = {
-    REG_MAX_CHARGING_CURRENT: "max_current_a",
-    REG_MAX_CHARGING_POWER:   "max_power_kw",
-}
-
-
-def get_setpoint_bounds(register: int, model_code: str | None) -> tuple[int, int] | None:
-    """(min_raw, max_raw) for a re-assertable setpoint register, in the same
-    0.1-unit raw representation the register itself stores and the number
-    entities scale to/from - bounded by the detected model's own rated
-    capabilities (see get_capabilities above), not a single hardcoded model.
-    Returns None for any register this doesn't apply to."""
-    capability_key = SETPOINT_CAPABILITY_KEY.get(register)
-    if capability_key is None:
-        return None
-    max_value = get_capabilities(model_code)[capability_key]
-    return SETPOINT_MIN_RAW[register], int(round(max_value * 10))
-
-
-# A block's last successful read must be within this many scan intervals to
-# be considered fresh. 3x mirrors MAX_STATUS_READ_FAILURES's "3 consecutive
-# misses" tolerance for the status block, applied uniformly to all blocks -
-# generous enough to absorb a couple of transient poll failures without
-# flapping entities unavailable, while still catching a block that's
-# genuinely stopped answering.
-BLOCK_STALENESS_FACTOR = 3
