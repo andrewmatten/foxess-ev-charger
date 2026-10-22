@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "FoxESS EV Charger",
+        "title": "Mit dem Charger verbinden",
         "description": "Netzwerkdaten des Chargers eingeben. Er muss im lokalen Netz auf Modbus-TCP-Anfragen antworten.",
         "data": {
           "host": "IP-Adresse oder Hostname des Chargers",
@@ -23,7 +23,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "FoxESS EV Charger – Optionen",
+        "title": "Charger-Optionen",
         "data": {
           "scan_interval": "Aktualisierungsintervall in Sekunden"
         }
