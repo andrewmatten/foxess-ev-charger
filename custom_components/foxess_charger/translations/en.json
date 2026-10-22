@@ -2,30 +2,30 @@
   "config": {
     "step": {
       "user": {
-        "title": "Fox ESS EV Charger Setup",
-        "description": "Configure your Fox ESS EV Charger connection",
+        "title": "FoxESS EV Charger",
+        "description": "Enter the charger's network details. It must answer Modbus TCP requests on your local network.",
         "data": {
-          "host": "IP Address",
-          "port": "Port",
-          "slave_id": "Modbus Slave ID",
-          "scan_interval": "Scan Interval (seconds)"
+          "host": "Charger IP address or hostname",
+          "port": "Modbus TCP port",
+          "slave_id": "Modbus unit ID (slave ID)",
+          "scan_interval": "Scan interval in seconds"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the charger. Please check the IP address and port.",
-      "unknown": "Unexpected error occurred"
+      "cannot_connect": "The charger did not answer a Modbus read. Check the host, port and unit ID.",
+      "unknown": "Something unexpected went wrong; the log has the details."
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "This charger is already set up."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Fox ESS Charger Options",
+        "title": "FoxESS EV Charger options",
         "data": {
-          "scan_interval": "Scan Interval (seconds)"
+          "scan_interval": "Scan interval in seconds"
         }
       }
     },
