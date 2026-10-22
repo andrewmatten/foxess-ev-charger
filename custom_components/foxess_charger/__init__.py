@@ -11,9 +11,10 @@ import logging
 import time
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
     CONF_HOST, CONF_PORT, CONF_SLAVE_ID, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS,
@@ -23,6 +24,10 @@ from .persistence import ChargerStorage
 
 _LOGGER = logging.getLogger(__name__)
 
+# Device registry identity. The model is replaced by the one the charger
+# reports (0x101E) once it has been read.
+MANUFACTURER = "FoxESS"
+DEVICE_NAME = "FoxESS Charger"
 DEFAULT_MODEL = "A7300P1-E-B-WO"
 
 __all__ = [
@@ -45,14 +50,14 @@ async def async_create_controller(hass: HomeAssistant, entry: ConfigEntry, *, pe
 
 
 def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator) -> DeviceInfo:
-    """Device identity is the config entry; the model is read from the
-    charger when known."""
-    model = (coordinator.data or {}).get("id_model_code") or DEFAULT_MODEL
+    """One device per config entry, identified by the entry ID. The model
+    is the charger's own once it has been read."""
+    reported_model = (coordinator.data or {}).get("id_model_code")
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name="FoxESS Charger",
-        manufacturer="FoxESS",
-        model=model,
+        manufacturer=MANUFACTURER,
+        model=reported_model or DEFAULT_MODEL,
+        name=DEVICE_NAME,
     )
 
 
@@ -95,7 +100,7 @@ async def _async_close_quietly(controller) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    scan_interval = entry.options.get("scan_interval", DEFAULT_SCAN_INTERVAL)
+    """Load saved state, start the controller, then the poller and entities."""
     storage = ChargerStorage(hass, entry.entry_id)
     loaded = await storage.async_load()
 
@@ -109,7 +114,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"FoxESS controller did not initialize: {err}") from err
 
     coordinator = FoxESSChargerCoordinator(
-        hass, controller, scan_interval, storage=storage, entry_id=entry.entry_id,
+        hass, controller, entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        storage=storage, entry_id=entry.entry_id,
     )
     coordinator.restore(loaded.session, loaded.energy)
     try:
@@ -149,20 +155,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:  # noqa: BLE001 - must not mask the setup failure
             _LOGGER.exception("Error shutting down FoxESS coordinator")
         raise
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """A new poll interval only takes effect through a full reload."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        stored = hass.data[DOMAIN].pop(entry.entry_id)
-        stored["coordinator"].async_clear_work_mode_issue()
-        await stored["coordinator"].async_shutdown()
-        await stored["controller"].async_close()
-        await stored["coordinator"].async_flush()
-    return unload_ok
+    """Remove the entities and the work-mode repair issue, stop polling,
+    drain and close the controller, then save session/energy state."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
+    runtime = hass.data[DOMAIN].pop(entry.entry_id)
+    coordinator = runtime["coordinator"]
+    coordinator.async_clear_work_mode_issue()
+    await coordinator.async_shutdown()
+    await runtime["controller"].async_close()
+    await coordinator.async_flush()
+    return True
