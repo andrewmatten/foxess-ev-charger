@@ -152,6 +152,7 @@ class _Evidence:
             and self.cc_status in (0, 1)
             and isinstance(self.power_raw, int)
             and isinstance(self.fault_code, int)
+            and self.fault_code != UNKNOWN_FAULT_CODE   # unreadable, not "no fault"
             and 0 <= self.power_raw <= MAX_POWER_RAW
         )
 

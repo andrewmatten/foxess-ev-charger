@@ -30,7 +30,7 @@ from custom_components.foxess_charger.transport import TransportError
 
 from ha_harness import make_entry
 from rebuild_simulator import CHARGING, SimCharger
-from test_controller import CC, CTRL, CUR, POW, POWER, STATUS, FakeClock, FakeIO, make, saved
+from test_controller import CC, CTRL, CUR, POW, POWER, STATUS, FakeClock, FakeIO, make, saved, spin
 
 FAULT_HI, FAULT_LO = 0x101A, 0x101B
 
@@ -132,6 +132,23 @@ async def test_all_ones_fault_register_is_unknown_not_a_fault():
     io.regs[FAULT_HI] = io.regs[FAULT_LO] = 0xFFFF
     await c._op_refresh()
     assert not c.diagnostics["safety_latched"]
+
+
+@pytest.mark.parametrize("path", ["refresh", "poll"])
+async def test_unknown_fault_register_alone_zeroes_after_grace(path):
+    """Only the fault register reads 0xFFFF/0xFFFF; status, connector and
+    power stay valid. An unreadable fault register is missing telemetry: past
+    the grace the cap goes to zero (no latch), and no positive refresh lands."""
+    c, io = await make()
+    io.regs[FAULT_HI] = io.regs[FAULT_LO] = 0xFFFF
+    step = c._op_refresh if path == "refresh" else c.async_poll
+    await step()
+    io.clock.now += 25
+    await step()
+    await spin(lambda: io.regs[POW] == 0)
+    assert "telemetry_uncertain" in c.diagnostics["protective_reasons"]
+    assert not c.diagnostics["safety_latched"]
+    assert positive_writes(io) == []
 
 
 # ── a stalled save cannot hold off the protective zero ───────────────
