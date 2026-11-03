@@ -65,6 +65,8 @@ SAFETY_FALLBACK_CURRENT_RAW = 60   # 6 A
 STOP_COMMAND = 2
 OBSERVATION_GAP_S = 1.0            # pause needs two agreeing reads this far apart
 POLL_STEP_S = 0.5
+# A latch caused only by lost comms releases (paused) after this long healthy.
+COMMS_LATCH_RELEASE_S = 120
 
 VALID_STATUS = {0, 1, 2, 3, 4, 5, 6, 8, 9}
 PAUSED_STATUS = {0, 1, 4, 5}       # acceptable after a zero setpoint
@@ -127,6 +129,7 @@ class Intent:
     revision: int = 0
     safety_latched: bool = False
     stop_fallback: bool = False
+    comms_latch: bool = False   # latch cause was only a link failure (see _note_link_health)
 
 
 @dataclass(frozen=True)
@@ -183,7 +186,9 @@ def _parse_saved(saved: Any) -> Intent | None:
         return None
     if not (_is_int(rev) and rev >= 0):
         return None
-    return Intent(flags[0], power, current, rev, flags[1], flags[2])
+    # Unknown or missing cause restores as a permanent latch.
+    comms = flags[1] and saved.get("comms_latch") is True
+    return Intent(flags[0], power, current, rev, flags[1], flags[2], comms)
 
 
 class ChargingController:
@@ -241,6 +246,7 @@ class ChargingController:
         self._work_mode: int | None = None       # last decoded 0x3000, kept across failed reads
         self._mismatch_since: float | None = None
         self._mismatch_count = 0
+        self._link_ok_since: float | None = None  # comms latch release timer
         self._wake = asyncio.Event()             # refresh interval shortened
         self._read_snapshot = read_snapshot
         self._intent = Intent()
@@ -312,6 +318,7 @@ class ChargingController:
             "phase": self.phase,
             "revision": self._intent.revision,
             "safety_latched": self._intent.safety_latched,
+            "comms_latch": self._intent.comms_latch,
             "stop_fallback": self._intent.stop_fallback,
             "protective_reasons": sorted(self._protect),
             "degraded_reasons": sorted(self._degraded),
@@ -329,6 +336,7 @@ class ChargingController:
             "schema": SCHEMA, "enabled": i.enabled, "power_raw": i.power_raw,
             "current_raw": i.current_raw, "revision": i.revision,
             "safety_latched": i.safety_latched, "stop_fallback": i.stop_fallback,
+            "comms_latch": i.comms_latch,
         }
 
     # ── derived wire values ──────────────────────────────────────────────
@@ -522,7 +530,8 @@ class ChargingController:
         faulted = ev.status == FAULT_STATUS or (
             _is_int(fault_code) and fault_code not in (0, UNKNOWN_FAULT_CODE)
         )
-        if not faulted or self._intent.safety_latched:
+        i = self._intent
+        if not faulted or (i.safety_latched and not i.comms_latch):
             return False
         self._last_error = f"charger fault (status {ev.status}, fault code {fault_code})"
         _LOGGER.error("FoxESS %s; output latched to zero", self._last_error)
@@ -725,7 +734,7 @@ class ChargingController:
                 await self._write_confirmed(
                     REG_MAX_CHARGING_POWER, power, wire, self._clock() + self._timeout)
         except ControlError:
-            await self._latch_fault()
+            await self._latch_fault(comms=True)
             if power == 0:
                 await self._stop_if_drawing()
             raise
@@ -804,10 +813,10 @@ class ChargingController:
             await self._send(REG_CHARGING_CONTROL, STOP_COMMAND, None)
             step_deadline = min(deadline, self._clock() + self._retry)
             if await self._await_evidence(stopped, None, step_deadline) is not None:
-                await self._update(stop_fallback=True)
+                await self._update(stop_fallback=True, comms_latch=False)
                 return
             if self._clock() >= deadline:
-                await self._update(safety_latched=True)
+                await self._update(safety_latched=True, comms_latch=False)
                 raise ControlError("charging did not stop after zero power and Stop")
 
     async def _stop_if_drawing(self) -> None:
@@ -829,19 +838,25 @@ class ChargingController:
                 REG_MAX_CHARGING_POWER, 0, None, self._clock() + self._timeout
             )
         except ControlError:
-            await self._latch_fault()
+            await self._latch_fault(comms=True)
             await self._stop_if_drawing()
 
-    async def _latch_fault(self) -> None:
+    async def _latch_fault(self, comms: bool = False) -> None:
         """Latch the fault and make one protective zero attempt.
+
+        ``comms``: caused only by an unconfirmed write or read-back (a link
+        failure), which _note_link_health may release. Any other cause makes
+        the latch permanent until an explicit enable.
 
         Protection comes before durability: the latch takes effect in memory
         and the zero is sent before the (bounded) save, so a slow store can
         never hold the zero back."""
-        newly = not self._intent.safety_latched
+        i = self._intent
+        comms = comms and (not i.safety_latched or i.comms_latch)
+        newly = not i.safety_latched or comms != i.comms_latch
         if newly:
             self._intent = replace(
-                self._intent, revision=self._intent.revision + 1, safety_latched=True
+                i, revision=i.revision + 1, safety_latched=True, comms_latch=comms
             )
         if not self._intent.stop_fallback:
             try:
@@ -926,6 +941,7 @@ class ChargingController:
                 wire, power, current, held = None, None, None, True
             if not power:
                 self._authorized = None
+            zero_confirmed = False
             try:
                 # Every address is refreshed even if an earlier one failed:
                 # a refused or ignored 0x3001 must never keep the
@@ -954,6 +970,7 @@ class ChargingController:
                         self._hold_since = None  # a confirmed write ends any hold
                 if current is None:
                     self._degraded.discard(_DEGRADED_CURRENT)
+                zero_confirmed = power == 0 and seen and not mismatched
             except _Superseded:
                 self._counters["superseded"] += 1
                 ok = True  # the newer command writes its own value
@@ -962,10 +979,36 @@ class ChargingController:
             if self._mismatch_count and self._mismatch_persistent():
                 self._last_error = "charger setpoint not confirmed by read-back"
                 self._note_readback(False)
-                await self._latch_fault()
+                await self._latch_fault(comms=True)
+            await self._note_link_health(ev, zero_confirmed)
         self._counters["refreshes" if ok else "refresh_failures"] += 1
         self._maybe_correct(ev)
         return ok
+
+    async def _note_link_health(self, ev: _Evidence, zero_confirmed: bool | None) -> None:
+        """Release a comms-only fault latch once the link has been healthy for
+        COMMS_LATCH_RELEASE_S: every frame valid, fault-free and not drawing,
+        and every refresh confirming the zero setpoint. Polls pass None: they
+        can reset the timer but not advance it. The release leaves charging
+        paused (enabled False); only an explicit enable resumes."""
+        i = self._intent
+        healthy = (
+            i.safety_latched and i.comms_latch and zero_confirmed is not False
+            and ev.valid and not ev.drawing
+            and ev.status != FAULT_STATUS and ev.fault_code == 0
+        )
+        if not healthy:
+            self._link_ok_since = None
+        elif zero_confirmed is None:
+            pass
+        elif self._link_ok_since is None:
+            self._link_ok_since = ev.at
+        elif ev.at - self._link_ok_since >= COMMS_LATCH_RELEASE_S:
+            self._link_ok_since = None
+            _LOGGER.warning(
+                "FoxESS link healthy for %d s; communications fault latch released, "
+                "charging stays paused until enabled", COMMS_LATCH_RELEASE_S)
+            await self._update(enabled=False, safety_latched=False, comms_latch=False)
 
     def _maybe_correct(self, ev: _Evidence) -> None:
         """Charging while intent says off: re-assert zero (and Stop if needed)."""
@@ -1074,6 +1117,7 @@ class ChargingController:
             )
             changed = self._note_telemetry(ev)
             changed = await self._note_fault(ev, snap.get("fault_code")) or changed
+            await self._note_link_health(ev, None)
             changed = await self._note_session(ev) or changed
             changed = await self._note_starting(ev) or changed
             await self._track_unplug(ev)
@@ -1143,7 +1187,8 @@ class ChargingController:
             power = regs[0]
         async def enable() -> CommandResult:
             intent = await self._update_positive(
-                enabled=True, power_raw=power, safety_latched=False, stop_fallback=False
+                enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
+                comms_latch=False,
             )
             return await self._run(lambda: self._op_apply(intent.revision))
 

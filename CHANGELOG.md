@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.1.1 - 2026-11-03
+
+- Fixed: a fault latch caused only by a lost link no longer blocks charging until someone flips the switch. On 30 Oct a Modbus timeout during a write latched the charger and it stayed latched for ~21 h although the charger was healthy. A latch whose only cause was an unconfirmed write or read-back now clears after 120 s of healthy link: every status reading valid, no fault, not drawing, and every refresh confirming the zero power limit. Any bad reading or drawing restarts the 120 s. The release leaves charging paused; it resumes only on a normal enable (e.g. from the automation).
+- A charger fault (status 6 or fault bits), a failed Stop, or a latch restored from a save that doesn't record the cause still stays latched until an explicit enable, as before. A fault seen while comms-latched makes the latch permanent.
+- The cause is saved (`comms_latch`) and shown in diagnostics. Older saved files load as a permanent latch.
+
+## 3.1.0 - included in 3.1.1
+
+- Rewrote the code inherited from the original fork (sensor, number, binary sensor, switch and select platforms, config flow, setup glue, register map, Modbus client framing) so the whole project can be MIT licensed. Entity IDs, names and behaviour are unchanged, checked against contract snapshots recorded from 3.0.7 and a supervised charge on real hardware.
+- Reworded the setup and options dialogs (en, de).
+- Fixed: fault registers reading 0xFFFF in an otherwise valid frame now count as missing telemetry, so the power limit goes to zero after the normal grace period.
+
 ## 3.0.7 - 2026-10-22
 
 - Fixed: Total Energy frozen after a charger counter reset. If the charger's lifetime counter drops (for example after a reboot: 801.3 kWh to 142.7 kWh on 14 Oct) and stays at the lower value, it was rejected on every poll forever. A lower reading seen consistently (same or rising, rate-plausible, for at least 20 polls and 10 minutes) is now accepted as a hardware reset. A saved offset keeps Total Energy carrying on from the last good value, so it never goes backwards. One warning is logged when a reset is accepted. Single or scattered low reads are still rejected, and the other plausibility checks apply to the offset-adjusted value. The offset is saved with the energy baseline; older saved files load unchanged.
