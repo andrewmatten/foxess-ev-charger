@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.1.2-beta.1 - 2026-11-03
+
+- Test version for issue #4. Fixed: charging blocked forever with "safety configuration unconfirmed" on chargers that refuse every Command Time Validity (0x3005) write, such as the 22 kW A022KP1. If the charger answers Modbus exception 3 and holds a value from 1 to 180 s, that value is accepted and a warning is logged. The limit is still refreshed every 30 s and the 6 A fallback must still confirm. Any other refusal, or a value outside that range, still blocks charging. What such a charger does if HA stops responding is untested. The 7.3 kW A7300P1 returns to its full rated power about 60 s after the last write, not to 6 A, so assume the same here until tested.
+
 ## 3.1.1 - 2026-11-03
 
 - Fixed: a fault latch caused only by a lost link no longer blocks charging until someone flips the switch. On 30 Oct a Modbus timeout during a write latched the charger and it stayed latched for ~21 h although the charger was healthy. A latch whose only cause was an unconfirmed write or read-back now clears after 120 s of healthy link: every status reading valid, no fault, not drawing, and every refresh confirming the zero power limit. Any bad reading or drawing restarts the 120 s. The release leaves charging paused; it resumes only on a normal enable (e.g. from the automation).
