@@ -238,14 +238,13 @@ async def test_comms_hold_doubles_per_release_within_an_hour_and_caps():
 
 
 @pytest.mark.parametrize("extra", [{}, {"comms_latch": "yes"}, {"latch_cause": "bogus"}])
-async def test_restored_latch_with_unknown_cause_releases_once(extra):
+async def test_restored_latch_with_unknown_cause_stays_latched(extra):
+    """A legacy latch may have been earth leakage / contactor / emergency stop:
+    unclassified means manual only (Codex review 2026-11-07)."""
     c, io = await make(saved(enabled=False, safety_latched=True, **extra), **NOON)
-    assert cause(c) == "unknown"
-    for _ in range(10):
-        await refresh(c, io, 30)
-    assert c.phase == "faulted"                    # not the 120 s comms hold
-    await healthy_for(c, io, FAULT_RELEASE_S)
-    assert c.phase == "paused" and positive_writes(io) == []
+    assert cause(c) == "hard"
+    await healthy_for(c, io, 3600)
+    assert c.phase == "faulted" and c.needs_human
 
 
 async def test_restored_unknown_cause_with_hard_fault_present_stays_latched():
