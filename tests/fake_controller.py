@@ -52,6 +52,8 @@ class FakeController:
         self._current: int | None = None
         self.safety_latched = False
         self.stop_fallback = False
+        self.latch_cause = None
+        self.needs_human = False
         self.phase = "idle"
         self.diagnostics = {"txid_mismatches": 0, "short_reads": 0}
         self.config_ok = True

@@ -103,7 +103,10 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     @property
     def extra_state_attributes(self) -> dict:
         controller = self.coordinator.controller
-        return {"intent_enabled": controller.intent_enabled, "control_phase": controller.phase}
+        return {
+            "intent_enabled": controller.intent_enabled, "control_phase": controller.phase,
+            "latch_cause": controller.latch_cause, "needs_human": controller.needs_human,
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_command(self.coordinator.controller.async_enable(), "start charging")

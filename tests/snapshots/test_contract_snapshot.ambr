@@ -7234,6 +7234,8 @@
       'friendly_name': 'FoxESS Charger Charging',
       'icon': 'mdi:ev-plug-type2',
       'intent_enabled': True,
+      'latch_cause': None,
+      'needs_human': False,
     }),
     'context': <ANY>,
     'entity_id': 'switch.foxess_charger_charging',
@@ -10050,6 +10052,8 @@
       'friendly_name': 'FoxESS Charger Charging',
       'icon': 'mdi:ev-plug-type2',
       'intent_enabled': True,
+      'latch_cause': None,
+      'needs_human': False,
     }),
     'context': <ANY>,
     'entity_id': 'switch.foxess_charger_charging',
@@ -14367,6 +14371,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14374,6 +14380,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': True,
         }),
@@ -14381,6 +14389,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14388,6 +14398,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14395,6 +14407,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14402,6 +14416,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': None,
         }),
@@ -14409,6 +14425,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14416,6 +14434,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14423,6 +14443,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14430,6 +14452,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14437,6 +14461,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14444,6 +14470,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14451,6 +14479,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14458,6 +14488,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': True,
         }),
@@ -14465,6 +14497,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14472,6 +14506,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': None,
         }),
@@ -14479,6 +14515,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14486,6 +14524,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': True,
         }),
@@ -14493,6 +14533,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14500,6 +14542,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': True,
         }),
@@ -14507,6 +14551,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14514,6 +14560,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': None,
         }),
@@ -14521,6 +14569,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14528,6 +14578,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14535,6 +14587,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14542,6 +14596,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14549,6 +14605,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14556,6 +14614,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': None,
         }),
@@ -14563,6 +14623,8 @@
           'attributes': dict({
             'control_phase': 'paused',
             'intent_enabled': False,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),
@@ -14570,6 +14632,8 @@
           'attributes': dict({
             'control_phase': 'enabled',
             'intent_enabled': True,
+            'latch_cause': None,
+            'needs_human': False,
           }),
           'is_on': False,
         }),

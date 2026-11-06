@@ -492,7 +492,9 @@ async def test_ignored_zero_pause_falls_back_to_stop_and_latches(rigs, stop_mode
     ctl = await rig.restart()
     await rig.clock.advance(300)
     assert rig.sim.positive_cap_writes(stop_seq) == []
-    assert ctl.export_state()["stop_fallback"] is True
+    # Quiet for STOP_FALLBACK_CLEAR_S: a plain pause, still nothing positive.
+    assert ctl.export_state()["stop_fallback"] is False and ctl.phase == "paused"
+    assert rig.sim.state == FINISHED
 
     assert (await rig.run(ctl.async_enable())).outcome == "confirmed"
     assert (CTRL, 1) not in rig.sim.wire_writes()

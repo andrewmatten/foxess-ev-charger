@@ -897,7 +897,22 @@ async def test_confirmed_unplug_releases_pause_for_a_new_external_session():
     assert 0 not in io.power_writes() and io.regs[STATUS] == 3
 
 
-@pytest.mark.parametrize("latch", ["safety_latched", "stop_fallback"])
+async def test_unplug_releases_a_stop_fallback_like_a_pause():
+    c, io = await make(saved(enabled=False, power=50, stop_fallback=True), charging=False)
+    assert c.phase == "stopped"
+    io.regs[CC] = 0
+    await _poll_twice(c, io)
+    assert c.phase == "paused" and c.export_state()["stop_fallback"] is False
+    io.writes.clear()
+    io.regs[CC] = 1                  # replug; Plug&Charge starts by itself
+    io.regs[POW] = 73
+    io.stopped = False
+    await c.async_poll()
+    await spin(lambda: c.intent_enabled and io.regs[POW] == 50)
+    assert 0 not in io.power_writes() and io.regs[STATUS] == 3
+
+
+@pytest.mark.parametrize("latch", ["safety_latched"])
 async def test_unplug_never_releases_a_fault_or_stop_latch(latch):
     c, io = await make(saved(enabled=False, power=50, **{latch: True}), charging=False)
     io.regs[CC] = 0

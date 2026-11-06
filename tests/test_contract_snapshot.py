@@ -218,6 +218,7 @@ class _Controller:
         self.desired_power_raw = power
         self.desired_current_raw = current
         self.phase = "enabled" if enabled else "paused"
+        self.latch_cause, self.needs_human = None, False
         self.calls: list[tuple] = []
         self._outcome = outcome
         self._fail = fail

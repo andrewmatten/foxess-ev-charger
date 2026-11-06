@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: a fault latch could hold for hours when the link kept dropping single frames (6 Nov), because every lost frame restarted the 120 s release timer. Only drawing, a fault, a read-back mismatch or the telemetry grace running out (~25 s of bad frames) restart it now.
+- The latch records its cause (`latch_cause`, saved and shown on the charging switch): `comms` releases after 120 s healthy (doubling for each release in the last hour, max 15 min); `fault` (status 6 without fault bits, or only voltage, frequency, temperature, CP or meter-comms bits) and `stop_failed` release after 10 min clear and not drawing (`stop_failed` never 18:00-21:00); `hard` faults (emergency stop, PE, leakage, overcurrent, contactor, breaker, lock, metering, ...) never. At most 3 auto-releases per 24 h, then the switch shows `needs_human: true`. A release always leaves charging paused. A latch restored without a cause releases once like `stop_failed`; 3.1.1's `comms_latch: true` loads as `comms`.
+- A Stop fallback ('stopped') now ends by itself: unplugging releases it like a normal pause, and after 5 min of healthy, not-drawing readings it becomes a plain pause with the zero limit refreshed.
+
 ## 3.1.1 - 2026-11-03
 
 - Fixed: a fault latch caused only by a lost link no longer blocks charging until someone flips the switch. On 30 Oct a Modbus timeout during a write latched the charger and it stayed latched for ~21 h although the charger was healthy. A latch whose only cause was an unconfirmed write or read-back now clears after 120 s of healthy link: every status reading valid, no fault, not drawing, and every refresh confirming the zero power limit. Any bad reading or drawing restarts the 120 s. The release leaves charging paused; it resumes only on a normal enable (e.g. from the automation).
