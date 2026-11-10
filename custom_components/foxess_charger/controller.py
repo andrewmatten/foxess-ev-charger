@@ -61,6 +61,9 @@ LOW_POWER_RAW = 1                  # measured <= 0.1 kW counts as not drawing
 # a longer validity, so the effective validity is capped here.
 FIRMWARE_EXPIRY_S = 60
 MAX_REFRESH_S = 30
+# A positive cap with no acknowledged write for this long goes protective:
+# the 60 s firmware expiry minus margin for one retry and the zero write.
+CAP_ACK_LIMIT_S = 45
 SAFETY_VALIDITY_S = 60
 # Some models (A022KP1) refuse every 0x3005 write and hold their factory 180 s.
 MAX_FIXED_VALIDITY_S = 180
@@ -260,6 +263,7 @@ class ChargingController:
         self._bad_count = 0
         self._good_first: _Evidence | None = None   # recovery candidate
         self._hold_since: float | None = None       # recovery hold start (_op_refresh)
+        self._cap_at: float | None = None           # last acknowledged positive cap write
         self._next_safety_try = 0.0
         self._persisted = True
         # Latest intent not yet durable; retried from the refresh loop.
@@ -522,13 +526,21 @@ class ChargingController:
         except Exception as err:  # noqa: BLE001 - outcome unknown; read-back decides
             self._last_error = f"write 0x{address:04X}: {err}"
         else:
+            if address == REG_MAX_CHARGING_POWER:
+                self._cap_at = self._clock() if value else None   # an acked zero cannot lapse
             return True
         return False
 
     async def _write_once(self, address: int, value: int, wire: tuple | None) -> bool:
-        await self._send(address, value, wire)
+        sent = self._clock()
+        acked = await self._send(address, value, wire)
         regs = await self._read(address)
-        return regs is not None and regs[0] == value
+        ok = regs is not None and regs[0] == value
+        if ok and not acked and address == REG_MAX_CHARGING_POWER:
+            # No reply but the read-back shows the value: a zero is in force; a
+            # positive starts the cap clock if none runs, never extends one.
+            self._cap_at = (self._cap_at or sent) if value else None
+        return ok
 
     async def _write_confirmed(
         self, address: int, value: int, wire: tuple | None, deadline: float
@@ -995,6 +1007,10 @@ class ChargingController:
             wire = self._wire()
             power, current = wire
             held = False
+            if self._explicit_zero() or self._intent.stop_fallback:
+                self._cap_at = None
+            # The positive cap in force is relied on (written or held), not zeroed.
+            capped = bool(power) and (not ev.valid or self._session_active(ev))
             if power and self._session_active(ev):
                 # A fresh valid active-session observation authorizes the
                 # latest revision for background refresh.
@@ -1003,9 +1019,9 @@ class ChargingController:
                 # Inside the telemetry grace: hold. Re-sending even the last
                 # authorized cap would restart a session that finished
                 # unobserved (firmware 1.8), and a staged revision was never
-                # authorized. The cap written last stays in force (grace +
-                # refresh interval < firmware expiry); protective zero follows
-                # if the outage persists.
+                # authorized. The cap written last stays in force; protective
+                # zero follows if the outage persists or CAP_ACK_LIMIT_S passes
+                # without an acknowledged cap write.
                 wire, power, current, held = None, None, None, True
             elif power:
                 # Valid but no active session: zero, never positive.
@@ -1063,6 +1079,20 @@ class ChargingController:
                         self._hold_since = None  # a confirmed write ends any hold
                 if current is None:
                     self._degraded.discard(_DEGRADED_CURRENT)
+                if capped:
+                    now = self._clock()
+                    if self._cap_at is None:
+                        self._cap_at = now   # e.g. restored intent: count from here
+                    elif now - self._cap_at >= CAP_ACK_LIMIT_S:
+                        # Same protective zero as an expired telemetry grace,
+                        # and the same recovery; the recovery hold is skipped
+                        # so the zero goes out on the retry.
+                        self._last_error = (
+                            f"no acknowledged power cap write for {CAP_ACK_LIMIT_S} s")
+                        self._protect.add(_REASON_TELEMETRY)
+                        self._good_first = None
+                        self._hold_since = now - self._grace
+                        ok = False
             except _Superseded:
                 self._counters["superseded"] += 1
                 ok = True  # the newer command writes its own value
