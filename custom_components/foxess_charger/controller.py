@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
@@ -220,6 +221,18 @@ def _parse_saved(saved: Any) -> Intent | None:
     return Intent(flags[0], power, current, rev, flags[1], flags[2], cause)
 
 
+def _parse_releases(saved: dict, wall: float, now: float) -> list[float]:
+    """Saved release epochs as ``now``-clock times, oldest first. Only finite
+    numbers from the last RELEASE_HOLD_MAX_S and at most a minute ahead (a
+    wrong clock) count; anything malformed is dropped, never raises."""
+    raw = saved.get("latch_releases")
+    if not isinstance(raw, list):
+        return []
+    ages = [wall - t for t in raw if isinstance(t, (int, float))
+            and not isinstance(t, bool) and math.isfinite(t)]
+    return [now - a for a in sorted(ages, reverse=True) if -60 <= a < RELEASE_HOLD_MAX_S][-6:]
+
+
 class ChargingController:
     """Sole writer to the charger. All methods run on the event loop."""
 
@@ -229,6 +242,7 @@ class ChargingController:
         *,
         persist: Callable[[dict], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         confirmation_timeout: float = 10.0,
         start_confirmation_timeout: float = 45.0,
@@ -247,6 +261,7 @@ class ChargingController:
         # A save that hangs must not hold the lock (and the heartbeat) hostage.
         self._persist_timeout = persist_timeout
         self._clock = clock
+        self._wall = wall_clock          # only to save release times across restarts
         self._sleep = sleep
         self._timeout = confirmation_timeout
         # Firmware 1.8 takes 11-19 s from the nonzero write to a visible session.
@@ -374,12 +389,14 @@ class ChargingController:
         }
 
     def export_state(self) -> dict:
-        i = self._intent
+        i, wall, now = self._intent, self._wall(), self._clock()
         return {
             "schema": SCHEMA, "enabled": i.enabled, "power_raw": i.power_raw,
             "current_raw": i.current_raw, "revision": i.revision,
             "safety_latched": i.safety_latched, "stop_fallback": i.stop_fallback,
             "latch_cause": i.latch_cause,
+            # Epoch seconds: the monotonic clock restarts with the process.
+            "latch_releases": [round(wall - (now - t), 1) for t in self._releases],
         }
 
     # ── derived wire values ──────────────────────────────────────────────
@@ -1146,6 +1163,7 @@ class ChargingController:
             return
         self._link_ok_since = None
         # n >= 6 already holds every cause at the ceiling: keep the list bounded.
+        # Saved in the same write as the released intent (_update below).
         self._releases = [*self._releases, self._clock()][-6:]
         _LOGGER.warning(
             "FoxESS charger healthy for %d s; %s fault latch released, "
@@ -1173,6 +1191,8 @@ class ChargingController:
             active = ev.valid and ev.cc_status == 1 and ev.status in SESSION_STATUS
             self._intent = Intent(enabled=active)
         else:
+            if isinstance(saved, dict):
+                self._releases = _parse_releases(saved, self._wall(), self._clock())
             parsed = _parse_saved(saved)
             if parsed is None:
                 _LOGGER.warning("Saved charging intent is malformed; starting paused")
