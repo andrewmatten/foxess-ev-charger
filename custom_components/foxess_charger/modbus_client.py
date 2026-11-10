@@ -49,6 +49,8 @@ MAX_MBAP_LENGTH = 254
 MAX_READ_COUNT = 125
 
 DEFAULT_TRANSACTION_TIMEOUT = 5.0
+# Silent timeouts in a row after which the socket is dropped as half-open.
+MAX_SILENT_TIMEOUTS = 3
 
 
 class ModbusError(Exception):
@@ -139,6 +141,7 @@ class FoxESSModbusClient:
         self._tid       = 0
         self._sock: socket.socket | None = None
         self._lock       = threading.Lock()
+        self._silent_timeouts = 0
 
         # Transport-health counters surfaced by diagnostics.
         self.txid_mismatches     = 0
@@ -166,6 +169,7 @@ class FoxESSModbusClient:
         return self._tid
 
     def _close(self) -> None:
+        self._silent_timeouts = 0
         if self._sock is not None:
             try:
                 self._sock.close()
@@ -313,12 +317,15 @@ class FoxESSModbusClient:
                     raise self._fail(
                         f"Unit ID mismatch (sent {self._slave_id}, got {header[6]})",
                         sent=True, counter="unit_id_mismatches")
+                self._silent_timeouts = 0
                 return header + body
         except ModbusNoResponse:
             raise
         except _NoReplyYet as ex:
+            self._silent_timeouts += 1
             raise self._fail(f"no reply within the deadline: {ex}", sent=sent,
-                             counter="short_reads", close=False) from ex
+                             counter="short_reads",
+                             close=self._silent_timeouts >= MAX_SILENT_TIMEOUTS) from ex
         except _DeadlineExceeded as ex:
             counter = "short_reads" if sent else "connection_errors"
             raise self._fail(f"deadline exceeded: {ex}", sent=sent, counter=counter) from ex
