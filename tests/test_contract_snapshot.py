@@ -518,10 +518,6 @@ def test_const_contract(snapshot):
             str(model): const.get_capabilities(model)
             for model in (None, "", "A7300P1-E-B-WO", "a011-x", "A022", "B999")
         },
-        "get_heartbeat_interval": {
-            repr(value): const.get_heartbeat_interval(value)
-            for value in (None, True, "60", 0, -5, float("nan"), 1, 6, 10, 30, 60, 180)
-        },
     }
     assert {"values": values, "helpers": helpers} == snapshot
 

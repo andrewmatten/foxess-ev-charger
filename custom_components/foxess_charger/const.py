@@ -104,8 +104,7 @@ REG_ALLOWED_CHARGE_ENERGY = 0x3004  # session energy limit, kWh; 65535 = none se
 # observed behaviour shows this register actually accepts at least 180s. Do
 # not clamp a live-read value down to the old documented range; see
 # number.py's native_max_value for the corrected UI bound and
-# get_heartbeat_interval() below for why the *floor* on the derived heartbeat
-# interval is a separate concern from this register's own valid range.
+# FIRMWARE_MAX_TIME_VALIDITY below for the 60 s the firmware really honours.
 REG_TIME_VALIDITY = 0x3005
 REG_DEFAULT_CURRENT = 0x3006        # fallback current once the caps lapse, 0.1 A (6-32 A)
 # 0x3007-0x3009 are reserved. The next two are the charger's own automatic
@@ -312,20 +311,8 @@ EVENT_SESSION_COMPLETED = f"{DOMAIN}_session_completed"
 MAX_STATUS_READ_FAILURES = 3
 
 # ── Setpoint heartbeat timing ────────────────────────────────────────────────
-# Minimum floor on how often setpoints may be re-written to the charger,
-# regardless of the configured Command Time Validity - every write is
-# Modbus traffic to an embedded stack that has already demonstrated it can
-# desync under load, so re-assertion must never become a per-poll write loop
-# even if time_validity were misconfigured to something tiny (or zero).
-#
-# Must stay comfortably *below* half of time_validity's own documented
-# minimum (10s -> 5s), not above it: a floor of 10s used to defeat the
-# entire half-validity guarantee get_heartbeat_interval() exists to provide
-# right at that minimum - get_heartbeat_interval(10) was clamped back up to
-# 10s instead of the 5s the charger's own Command Time Validity window
-# actually requires. 3s leaves a real margin under 5s while still being far
-# enough above zero to block a runaway sub-second write loop for an
-# absurdly small/zero time_validity.
+# Floor on how often setpoints may be re-written to the charger, so
+# re-assertion never becomes a per-poll write loop.
 SETPOINT_REASSERT_MIN_INTERVAL = 3  # seconds
 
 # Used before the first successful read of REG_TIME_VALIDITY (0x3005) has
@@ -333,37 +320,11 @@ SETPOINT_REASSERT_MIN_INTERVAL = 3  # seconds
 # real device value.
 DEFAULT_TIME_VALIDITY = 60  # seconds
 
-# Adopted from a third-party contribution (following the evcc driver
-# convention) after comparing it against a fixed 30s interval. The charger silently reverts 0x3001/0x3002 to
-# maximum if not refreshed within its own configured Command Time Validity
-# (0x3005) - a fixed re-assert interval is only actually safe if it's always
-# comfortably shorter than whatever that register is set to. Ours wasn't
-# guaranteed to be: time_validity's own valid range is 10-60s, and a fixed
-# 30s floor has no margin left if it's ever set to, say, 15s. Halving the
-# *live* value (like evcc does) keeps the same safety margin regardless of
-# how time_validity is configured, rather than assuming a fixed number the
-# charger might not actually be using.
 # The firmware honours Command Time Validity only up to its documented 60s
 # maximum: with 0x3005 reading 180s, the real charger still reverted
 # 0x3001/0x3002 to maximum ~60s after each write (seen as a ~91s power
 # sawtooth). Never trust the register beyond this.
 FIRMWARE_MAX_TIME_VALIDITY = 60  # seconds
-
-
-def get_heartbeat_interval(time_validity: int | float | None) -> float:
-    """Half the charger's effective Command Time Validity (the register value
-    capped at FIRMWARE_MAX_TIME_VALIDITY), floored at
-    SETPOINT_REASSERT_MIN_INTERVAL so a very low value can't turn
-    re-assertion into a per-poll write loop. Missing, non-numeric or
-    non-positive values fall back to DEFAULT_TIME_VALIDITY."""
-    if (
-        isinstance(time_validity, bool)
-        or not isinstance(time_validity, (int, float))
-        or not time_validity > 0  # also rejects NaN
-    ):
-        time_validity = DEFAULT_TIME_VALIDITY
-    value = min(time_validity, FIRMWARE_MAX_TIME_VALIDITY)
-    return max(SETPOINT_REASSERT_MIN_INTERVAL, value / 2)
 
 
 # ── Energy plausibility guard ────────────────────────────────────────────────
