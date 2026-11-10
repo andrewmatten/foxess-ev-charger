@@ -15398,6 +15398,8 @@
       'issues': dict({
         'issues.needs_human.description': 'Der Charger hat einen Fehler gemeldet, der sich nicht von selbst behebt, daher bleibt das Laden ausgeschaltet. Prüfen Sie den Charger und das Fahrzeug. Wenn es sicher ist, schalten Sie den Ladeschalter selbst wieder ein, um fortzufahren.',
         'issues.needs_human.title': 'Charger benötigt Ihre Aufmerksamkeit',
+        'issues.wrong_work_mode.description': 'Der Work Mode des Chargers steht auf {mode}. Diese Integration funktioniert nur mit Plug&Charge: In jedem anderen Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Work Mode des Chargers auf Plug&Charge (Auswahl „Work Mode“ am Charger-Gerät).',
+        'issues.wrong_work_mode.title': 'Work Mode des Chargers muss Plug&Charge sein',
       }),
       'keys': list([
         'config.abort.already_configured',
@@ -15509,6 +15511,8 @@
         'entity.switch.lock.name',
         'issues.needs_human.description',
         'issues.needs_human.title',
+        'issues.wrong_work_mode.description',
+        'issues.wrong_work_mode.title',
         'options.error.scan_interval_too_high',
         'options.error.scan_interval_too_low',
         'options.step.init.data.scan_interval',

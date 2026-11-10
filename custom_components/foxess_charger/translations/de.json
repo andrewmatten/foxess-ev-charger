@@ -35,6 +35,10 @@
     }
   },
   "issues": {
+    "wrong_work_mode": {
+      "title": "Work Mode des Chargers muss Plug&Charge sein",
+      "description": "Der Work Mode des Chargers steht auf {mode}. Diese Integration funktioniert nur mit Plug&Charge: In jedem anderen Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Work Mode des Chargers auf Plug&Charge (Auswahl „Work Mode“ am Charger-Gerät)."
+    },
     "needs_human": {
       "title": "Charger benötigt Ihre Aufmerksamkeit",
       "description": "Der Charger hat einen Fehler gemeldet, der sich nicht von selbst behebt, daher bleibt das Laden ausgeschaltet. Prüfen Sie den Charger und das Fahrzeug. Wenn es sicher ist, schalten Sie den Ladeschalter selbst wieder ein, um fortzufahren."
