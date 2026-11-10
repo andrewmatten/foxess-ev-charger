@@ -1025,7 +1025,7 @@ class ChargingController:
                 wire, power, current, held = None, None, None, True
             if not power:
                 self._authorized = None
-            seen = mismatched = False
+            seen = mismatched = lost = False
             try:
                 # Every address is refreshed even if an earlier one failed:
                 # a refused or ignored 0x3001 must never keep the
@@ -1043,6 +1043,7 @@ class ChargingController:
                     # latch window as a wrong read-back.
                     seen = True
                     mismatched = mismatched or not good
+                    lost = lost or back is None
                     if address == REG_MAX_CHARGING_CURRENT:
                         if good:
                             self._degraded.discard(_DEGRADED_CURRENT)
@@ -1063,8 +1064,10 @@ class ChargingController:
                 self._last_error = "charger setpoint not confirmed by read-back"
                 self._note_readback(False)
                 await self._latch_fault("comms")
-            # Zero written: confirmed True, mismatch False; nothing written: None.
-            await self._note_link_health(ev, not mismatched if seen and power == 0 else None)
+            # Zero written: confirmed True, mismatch False; nothing written or
+            # read-back lost: None (no evidence, the release timer just waits).
+            await self._note_link_health(
+                ev, not mismatched if seen and power == 0 and not lost else None)
         self._counters["refreshes" if ok else "refresh_failures"] += 1
         self._maybe_correct(ev)
         return ok
