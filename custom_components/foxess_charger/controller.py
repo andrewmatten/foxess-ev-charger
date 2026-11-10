@@ -81,8 +81,8 @@ FAULT_RELEASE_S = 600
 RELEASE_HOLD_MAX_S = 7200
 STOP_FALLBACK_CLEAR_S = 300        # quiet 'stopped' becomes a plain pause
 # Latch causes, by severity: a worse cause replaces a milder one, never back.
-# unknown = restored without a recorded cause; hard never auto-releases.
-LATCH_RANK = {"comms": 0, "fault": 1, "stop_failed": 2, "unknown": 2, "hard": 3}
+# hard never auto-releases.
+LATCH_RANK = {"comms": 0, "fault": 1, "stop_failed": 2, "hard": 3}
 # Fault bits that clear by themselves (FAULT_BITS in const.py): over/under
 # voltage, port temperature, frequency, CP, external meter comms, ambient temp.
 SELF_CLEARING_FAULT_MASK = sum(1 << b for b in (1, 2, 4, 7, 8, 14, 16))
@@ -215,7 +215,7 @@ def _parse_saved(saved: Any) -> Intent | None:
     cause = saved.get("latch_cause")
     if not flags[1]:
         cause = None
-    elif cause not in LATCH_RANK:   # 3.1.1 saved only comms_latch; else unknown
+    elif cause not in LATCH_RANK:   # 3.1.1 saved only comms_latch
         cause = "comms" if saved.get("comms_latch") is True else "hard"  # unclassified: manual only
     return Intent(flags[0], power, current, rev, flags[1], flags[2], cause)
 
