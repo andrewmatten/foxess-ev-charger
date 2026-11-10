@@ -1,10 +1,27 @@
 # Changelog
 
-## Unreleased
+## 3.1.3 - 2026-11-11
 
-- Fixed: a fault latch could hold for hours when the link kept dropping single frames (6 Nov), because every lost frame restarted the 120 s release timer. Only drawing, a fault, a read-back mismatch or the telemetry grace running out (~25 s of bad frames) restart it now.
-- The latch records its cause (`latch_cause`, saved and shown on the charging switch): `comms` releases after 120 s healthy (doubling for each release in the last hour, max 15 min); `fault` (status 6 without fault bits, or only voltage, frequency, temperature, CP or meter-comms bits) and `stop_failed` release after 10 min clear and not drawing (`stop_failed` never 18:00-21:00); `hard` faults (emergency stop, PE, leakage, overcurrent, contactor, breaker, lock, metering, ...) never. At most 3 auto-releases per 24 h, then the switch shows `needs_human: true`. A release always leaves charging paused. A latch restored without a cause releases once like `stop_failed`; 3.1.1's `comms_latch: true` loads as `comms`.
-- A Stop fallback ('stopped') now ends by itself: unplugging releases it like a normal pause, and after 5 min of healthy, not-drawing readings it becomes a plain pause with the zero limit refreshed.
+- Fixed (6 Nov): a fault latch could hold for hours when the link kept dropping single frames, because every lost frame restarted the release timer. Only drawing, a fault, a real read-back mismatch or about 20 s of bad frames restart it now. A lost read-back counts as no evidence, not as a mismatch.
+- Fixed (6 Nov): a Stop that worked after a lost zero write was recorded as a failed Stop and stayed latched. It is now a normal recoverable latch.
+- Fixed: pausing while the charger reports a self-clearing fault (status 6) no longer escalates to a failed Stop.
+- Fixed (present since 3.0.0): a lost power-limit refresh was counted as delivered, so two lost writes in a row could let the charger fall back to its own maximum while the integration still showed charging as limited. An unacknowledged write is now retried after 3 s, the refresh runs every 20 s (was 30 s), and if no positive limit has been acknowledged for 45 s the integration writes zero and treats the link as uncertain.
+- Latches now record a cause (`latch_cause`, saved and shown on the charging switch). `comms` (lost or unconfirmed writes) releases after 2 min of healthy readings. `fault` (status 6 without fault bits, or only voltage, frequency, temperature, CP or meter-comms bits) and `stop_failed` release after 10 min of healthy readings and not drawing. `hard` (emergency stop, PE, leakage, overcurrent, contactor, breaker, lock, metering and similar) never releases by itself.
+- Each release in a row doubles the wait, up to 2 hours. The count starts again once 2 hours pass without a new latch. Release times are saved, so a restart does not reset the wait. There is no daily limit and no time-of-day rule. A release always leaves charging paused; it resumes on a normal turn-on (for example from an automation).
+- `needs_human: true` on the charging switch now means exactly one thing: a `hard` latch. A Repairs notice appears while it is true and clears once charging is turned back on.
+- Changed: under a `hard` latch, only a person can turn charging back on (dashboard, phone app, or a script you run yourself). A turn-on from an automation is refused with an error. This includes notification action buttons and physical buttons that are handled by an automation. The solar surplus blueprint has the same check. Other latches can still be cleared by any turn-on.
+- Changed: the charging switch reads off while a latch or Stop holds output at zero. The `charging_stopped` device trigger now also fires when that happens mid-session.
+- A Stop fallback (`stopped`) now ends by itself: unplugging releases it like a normal pause, and after 5 min of healthy, not-drawing readings it becomes a plain pause with the zero limit refreshed.
+- A saved latch with no recognised cause loads as `comms` when 3.1.1's `comms_latch` is true, otherwise as `hard`. `comms_latch` is still written, so rolling back to 3.1.2 keeps a comms latch releasable.
+- Phase selector (issue #4): new option "Phase-switch box fitted", off by default. Without it the manual phase selector is unavailable and refuses changes. With it, the command is sent once and is no longer retried for 10 s while blocking the power-limit refresh. The README and entity text no longer say automatic phase switching needs a phase-switch box; only the manual selector does.
+- Changed: changing options (scan interval, the new phase-box option) now applies straight away without reloading the integration. A reload stops the power-limit refresh.
+- New diagnostic sensor "Charging Status Reason" says in plain terms why the car isn't charging right now. Diagnostics show the seconds until a latch auto-releases (`latch_release_in`).
+- A single bad zero reading no longer wipes the session energy. A genuine counter reset is accepted after three polls.
+- The charger link now reconnects after three unanswered requests in a row, instead of staying stuck on a dead connection.
+- Setup now rejects a port outside 1-65535 or a Modbus unit ID outside 0-255 on the form. Setting a number to a value the charger can't accept now shows a normal error instead of a traceback.
+- An offline charger or a failing storage write is logged once, with a note when it recovers, instead of on every poll.
+- Tests now run in CI, and releases go through `scripts/release.sh`.
+- Not yet confirmed on a real charger: everything in this release was checked in simulation only.
 
 ## 3.1.2 - 2026-11-05
 
