@@ -122,9 +122,10 @@ class FoxESSModbusClient:
     discarded (counted in `stale_replies`) and reading continues, still
     within the same deadline, for the reply that actually matches. Likewise,
     a deadline that elapses with no bytes of a reply received yet leaves the
-    connection open, on the chance the peer is just slow: closing it would
-    only guarantee the next transaction has to reconnect *and* still risks
-    meeting that same late reply as a mismatch. Every other framing or
+    connection open at first, on the chance the peer is just slow: closing
+    it would only guarantee the next transaction has to reconnect *and* still
+    risks meeting that same late reply as a mismatch. After
+    MAX_SILENT_TIMEOUTS such timeouts in a row it is closed as half-open. Every other framing or
     socket failure - a malformed header, a wrong Unit ID, a frame that
     stops arriving partway through, an actual socket error - closes the
     socket so the next call starts on a clean stream.
@@ -245,7 +246,7 @@ class FoxESSModbusClient:
             setattr(self, counter, getattr(self, counter) + 1)
         _LOGGER.log(level, "Modbus TCP %s:%s – %s – %s",
                     self._host, self._port, message,
-                    "resetting connection" if close else "keeping connection open")
+                    "resetting connection" if close else "connection kept for now")
         if close:
             self._close()
         return ModbusNoResponse(message, request_sent=sent)
