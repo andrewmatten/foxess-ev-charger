@@ -77,7 +77,6 @@ COMMS_HOLD_MAX_S = 900
 FAULT_RELEASE_S = 600
 STOP_FALLBACK_CLEAR_S = 300        # quiet 'stopped' becomes a plain pause
 MAX_AUTO_RELEASES = 3              # per rolling 24 h, then a human must enable
-NO_RELEASE_HOURS = range(18, 21)   # local 18:00-21:00: no stop_failed release
 # Latch causes, by severity: a worse cause replaces a milder one, never back.
 # unknown = restored without a recorded cause; hard never auto-releases.
 LATCH_RANK = {"comms": 0, "fault": 1, "stop_failed": 2, "unknown": 2, "hard": 3}
@@ -235,7 +234,6 @@ class ChargingController:
         telemetry_grace: float = 20.0,
         persist_timeout: float = 10.0,
         read_snapshot: Callable[[Any], Awaitable[dict]] | None = None,
-        local_hour: Callable[[], int] = lambda: time.localtime().tm_hour,
     ) -> None:
         if read_snapshot is None:
             reader = SnapshotReader(io, clock=clock)
@@ -277,7 +275,6 @@ class ChargingController:
         self._stop_ok_since: float | None = None  # stop fallback clear timer
         # shortcut: in memory, so a restart forgets past releases; persist if restarts loop.
         self._releases: list[float] = []         # auto-release times (clock)
-        self._local_hour = local_hour
         self._wake = asyncio.Event()             # refresh interval shortened
         self._read_snapshot = read_snapshot
         self._intent = Intent()
@@ -1113,10 +1110,7 @@ class ChargingController:
             hold = min(COMMS_LATCH_RELEASE_S * 2 ** self._releases_within(3600), COMMS_HOLD_MAX_S)
         else:
             hold = FAULT_RELEASE_S
-        if (
-            ev.at - self._link_ok_since < hold or self.needs_human
-            or (cause in ("stop_failed", "unknown") and self._local_hour() in NO_RELEASE_HOURS)
-        ):
+        if ev.at - self._link_ok_since < hold or self.needs_human:
             return
         self._link_ok_since = None
         self._releases.append(self._clock())

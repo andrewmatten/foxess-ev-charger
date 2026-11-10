@@ -15,7 +15,6 @@ from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_HOST, CONF_PORT, CONF_SLAVE_ID, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS,
@@ -47,9 +46,7 @@ async def async_create_controller(hass: HomeAssistant, entry: ConfigEntry, *, pe
     client = FoxESSModbusClient(
         entry.data[CONF_HOST], entry.data[CONF_PORT], entry.data[CONF_SLAVE_ID],
     )
-    # HA's configured time zone, not the container's (often UTC).
-    return ChargingController(ModbusRegisterIO(client), persist=persist,
-                              local_hour=lambda: dt_util.now().hour)
+    return ChargingController(ModbusRegisterIO(client), persist=persist)
 
 
 def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator) -> DeviceInfo:

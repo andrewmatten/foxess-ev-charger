@@ -6,7 +6,7 @@ released a comms-only latch after COMMS_LATCH_RELEASE_S of healthy link.
 Incident 2026-11-06 (twice): the link kept dropping single frames, each one
 restarting that timer, so the latch held for hours. Now the latch records
 its cause: comms (120 s, doubling per release in the last hour, max 15 min),
-self-clearing faults and failed Stops (10 min; failed Stop never 18:00-21:00)
+self-clearing faults and failed Stops (10 min, at any hour)
 release; hard faults never do; at most MAX_AUTO_RELEASES per 24 h, then
 needs_human. A release always leaves charging paused.
 """
@@ -24,7 +24,6 @@ from test_controller import CTRL, POW, make, saved
 from test_fault_and_stop_fallback import drain, positive_writes
 
 FAULT_HI, FAULT_LO = 0x101A, 0x101B
-NOON = {"local_hour": lambda: 12}
 
 
 def cause(c):
@@ -136,23 +135,8 @@ async def test_hard_fault_during_comms_latch_makes_it_permanent():
     assert c.phase == "faulted" and c.needs_human
 
 
-async def test_failed_stop_releases_after_ten_minutes_outside_the_evening_window():
-    hour = [19]
-    c, io = await make(local_hour=lambda: hour[0])
-    io.zero_pauses, io.stop_works = False, False
-    with pytest.raises(ControlError, match="did not stop"):
-        await c.async_pause()
-    assert c.phase == "faulted" and cause(c) == "stop_failed"
-    io.zero_pauses = True                          # charger healthy again
-    await healthy_for(c, io, 3 * FAULT_RELEASE_S)
-    assert c.phase == "faulted"                    # 18:00-21:00: never
-    hour[0] = 21
-    await refresh(c, io, 30)
-    assert c.phase == "paused" and positive_writes(io) == []
-
-
 async def test_failed_stop_with_charger_still_drawing_stays_latched():
-    c, io = await make(**NOON)
+    c, io = await make()
     io.ignore.add(POW)
     io.ignore.add(CTRL)                            # ignores both zero and Stop
     with pytest.raises(ControlError):
@@ -164,7 +148,7 @@ async def test_failed_stop_with_charger_still_drawing_stays_latched():
 
 
 async def test_comms_latch_with_charger_ignoring_zero_and_stop_becomes_stop_failed():
-    c, io = await comms_latched(**NOON)
+    c, io = await comms_latched()
     io.zero_pauses, io.stop_works = False, False   # still drawing despite zero and Stop
     await c.async_poll()                           # correction -> Stop fallback fails
     await drain(c)
@@ -241,14 +225,14 @@ async def test_comms_hold_doubles_per_release_within_an_hour_and_caps():
 async def test_restored_latch_with_unknown_cause_stays_latched(extra):
     """A legacy latch may have been earth leakage / contactor / emergency stop:
     unclassified means manual only (Codex review 2026-11-07)."""
-    c, io = await make(saved(enabled=False, safety_latched=True, **extra), **NOON)
+    c, io = await make(saved(enabled=False, safety_latched=True, **extra))
     assert cause(c) == "hard"
     await healthy_for(c, io, 3600)
     assert c.phase == "faulted" and c.needs_human
 
 
 async def test_restored_unknown_cause_with_hard_fault_present_stays_latched():
-    c, io = await make(saved(enabled=False, safety_latched=True), **NOON)
+    c, io = await make(saved(enabled=False, safety_latched=True))
     io.regs[FAULT_LO] = 1                          # emergency stop
     await c.async_poll()
     await drain(c)
