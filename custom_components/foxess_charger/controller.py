@@ -873,10 +873,9 @@ class ChargingController:
             await self._send(REG_CHARGING_CONTROL, STOP_COMMAND, None)
             step_deadline = min(deadline, self._clock() + self._retry)
             if await self._await_evidence(stopped, None, step_deadline) is not None:
-                # Drawing despite our zero is not a link failure.
-                worse = self._intent.safety_latched and self._worse("stop_failed")
-                await self._update(stop_fallback=True, **(
-                    {"latch_cause": "stop_failed"} if worse else {}))
+                # Stop worked: the latch keeps its cause; stop_failed is only
+                # for a charger heard drawing through zero and Stop (below).
+                await self._update(stop_fallback=True)
                 return
             if self._clock() >= deadline:
                 # Never heard the charger = link outage, not a failed stop: the
