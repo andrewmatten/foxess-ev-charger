@@ -81,8 +81,9 @@ class _ControllerSwitch(
 
 class FoxESSChargingSwitch(_ControllerSwitch):
     """On while charging is enabled and a session is in progress, including
-    a pause requested by the vehicle. Off when the user paused charging or
-    no session is running; unknown while the status cannot be read."""
+    a pause requested by the vehicle. Off when the user paused charging, a
+    fault latch or Stop holds output at zero, or no session is running;
+    unknown while the status cannot be read."""
 
     _attr_icon = "mdi:ev-plug-type2"
     _attr_translation_key = "charging"
@@ -93,7 +94,8 @@ class FoxESSChargingSwitch(_ControllerSwitch):
 
     @property
     def is_on(self) -> bool | None:
-        if not self.coordinator.controller.intent_enabled:
+        controller = self.coordinator.controller
+        if not controller.intent_enabled or controller.phase in ("faulted", "stopped"):
             return False
         status = valid_status(self.coordinator.data or {})
         if status is None:
