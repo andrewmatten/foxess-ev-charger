@@ -465,6 +465,10 @@ async def test_nonnumeric_reading_with_valid_unit_fails_safe(hass, install_bluep
     ({"needs_human": True}, False),    # hard latch: only a person may clear it
     ({"needs_human": False}, True),
     ({}, True),                        # a switch from another integration
+    # soft latch: the integration's release backoff clears it, not the surplus
+    ({"needs_human": False, "latch_cause": "fault"}, False),
+    ({"needs_human": False, "latch_cause": "stop_failed"}, False),
+    ({"needs_human": False, "latch_cause": None}, True),
 ])
 async def test_surplus_never_turns_on_a_switch_that_needs_a_person(
     hass, install_blueprint, attrs, starts,
