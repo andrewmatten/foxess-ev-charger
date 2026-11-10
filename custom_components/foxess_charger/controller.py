@@ -216,7 +216,7 @@ def _parse_saved(saved: Any) -> Intent | None:
     cause = saved.get("latch_cause")
     if not flags[1]:
         cause = None
-    elif cause not in LATCH_RANK:   # 3.1.1 saved only comms_latch
+    elif not isinstance(cause, str) or cause not in LATCH_RANK:   # 3.1.1 saved only comms_latch
         cause = "comms" if saved.get("comms_latch") is True else "hard"  # unclassified: manual only
     return Intent(flags[0], power, current, rev, flags[1], flags[2], cause)
 
