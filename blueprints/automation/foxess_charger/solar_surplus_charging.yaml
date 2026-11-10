@@ -261,7 +261,8 @@ action:
           # maximum. number.set_value is called before switch.turn_on when
           # stopped, but an integration may defer the physical register
           # write; this automation cannot guarantee the charger accepted
-          # the cap before starting. switch.turn_on is only issued when off.
+          # the cap before starting. switch.turn_on is only issued when off,
+          # and never while the switch says a person must re-enable charging.
           - conditions:
               - "{{ import_power < (import_ceiling_watts - hysteresis_watts) }}"
             sequence:
@@ -275,6 +276,7 @@ action:
                       value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
               - if:
                   - "{{ switch_is_off }}"
+                  - "{{ not state_attr(charging_switch, 'needs_human') }}"
                 then:
                   - action: switch.turn_on
                     target:
