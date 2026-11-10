@@ -252,3 +252,26 @@ async def test_corrupt_saved_latch_cause_loads_as_unclassified(bad, comms_latch,
                              comms_latch=comms_latch))
     assert c.phase == "faulted" and c.latch_cause == expected
 
+
+
+@pytest.mark.parametrize("latch", ["comms", "fault", "hard"])
+async def test_saved_state_keeps_comms_latch_for_a_rollback(latch):
+    """3.1.1/3.1.2 read only comms_latch: without it a comms latch would come
+    back manual-only after a rollback."""
+    c, io = await make()
+    if latch == "comms":
+        await drop_link_during_enable(c, io)
+    else:
+        io.regs[FAULT_LO] = 1 << 1 if latch == "fault" else 1
+        await c.async_poll()
+        await drain(c)
+    state = c.export_state()
+    assert state["latch_cause"] == latch and state["comms_latch"] is (latch == "comms")
+    del state["latch_cause"]                       # what 3.1.2 sees
+    c2, _ = await make(state)
+    assert c2.latch_cause == ("comms" if latch == "comms" else "hard")
+
+
+async def test_comms_latch_false_when_not_latched():
+    c, io = await make()
+    assert c.export_state()["comms_latch"] is False
