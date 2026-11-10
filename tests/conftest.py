@@ -32,3 +32,23 @@ if _REPO_ROOT not in sys.path:
 # tests that actually exercise hass's component loader (e.g. setting up a
 # config entry) should request `enable_custom_integrations` explicitly as a
 # fixture argument, same as any other opt-in fixture.
+
+
+@pytest.fixture(autouse=True)
+def _real_sockets_for_modbus_loopback_tests(request):
+    """Allow real localhost sockets in the two modbus loopback test modules only."""
+    # The HA test plugin blocks sockets per test; these modules need real TCP.
+    if request.module.__name__.rsplit(".", 1)[-1] not in (
+        "test_modbus_slow_replies",
+        "test_modbus_client_outcomes",
+    ):
+        yield
+        return
+    import socket
+
+    import pytest_socket
+
+    blocked = socket.socket
+    pytest_socket.enable_socket()
+    yield
+    socket.socket = blocked
