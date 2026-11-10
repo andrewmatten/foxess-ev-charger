@@ -366,6 +366,14 @@ class ChargingController:
         """Hard latch: it never auto-releases, only an explicit enable helps."""
         return self.latch_cause == "hard"
 
+    def _latch_release_in(self) -> float | None:
+        """Healthy seconds still needed before the latch auto-releases; None
+        when not latched, hard, or the healthy timer is not running."""
+        since = self._link_ok_since
+        if since is None or not self._intent.safety_latched or self.needs_human:
+            return None
+        return max(0.0, self._release_hold(self.latch_cause) - (self._clock() - since))
+
     @property
     def diagnostics(self) -> dict:
         transport = getattr(self._io, "counters", None)
@@ -377,6 +385,7 @@ class ChargingController:
             "safety_latched": self._intent.safety_latched,
             "latch_cause": self.latch_cause,
             "needs_human": self.needs_human,
+            "latch_release_in": self._latch_release_in(),
             "stop_fallback": self._intent.stop_fallback,
             "protective_reasons": sorted(self._protect),
             "degraded_reasons": sorted(self._degraded),
