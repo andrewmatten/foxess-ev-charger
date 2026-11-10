@@ -179,7 +179,7 @@ class FakeController:
         self.hw["max_charging_current_raw"] = raw
         return CommandResult("confirmed", self.revision, raw)
 
-    async def async_enable(self):
+    async def async_enable(self, *, clear_hard=False):
         self.calls.append(("enable",))
         self._maybe_fail("enable")
         if not self._connected_active():

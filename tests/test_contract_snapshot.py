@@ -238,7 +238,7 @@ class _Controller:
     def async_set_register(self, address, value):
         return self._answer("set_register", hex(address), value)
 
-    def async_enable(self):
+    def async_enable(self, *, clear_hard=False):
         return self._answer("enable")
 
     def async_pause(self):

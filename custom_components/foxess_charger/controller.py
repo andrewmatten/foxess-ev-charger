@@ -1351,9 +1351,12 @@ class ChargingController:
             # Only this fresh read may authorize; never a stale one.
             return self._session_active(ev) and not self._intent.safety_latched
 
-    async def async_enable(self) -> CommandResult:
-        """Explicit resume; also the only way out of a Stop fallback or fault latch."""
+    async def async_enable(self, *, clear_hard: bool = False) -> CommandResult:
+        """Explicit resume; also the only way out of a Stop fallback or fault latch.
+        A hard latch is cleared only with ``clear_hard`` (a person asked) and
+        only if it was already there when this enable was called."""
         self._require_ready()
+        clear_hard = clear_hard and self.needs_human   # a later hard latch was not acknowledged
         if _REASON_SAFETY in self._protect:
             raise ControlError("safety configuration unconfirmed; enable blocked")
         power = self._intent.power_raw
@@ -1363,6 +1366,11 @@ class ChargingController:
                 raise ControlError("no saved power and device maximum unreadable")
             power = regs[0]
         async def enable() -> CommandResult:
+            # No await between this check and the change in _update_positive,
+            # so on the one event loop no hard latch can land in between.
+            if self.needs_human and not clear_hard:
+                raise ControlError("charging is off after a fault that needs a person: "
+                                   "turn the charging switch on yourself in Home Assistant")
             intent = await self._update_positive(
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
                 latch_cause=None,

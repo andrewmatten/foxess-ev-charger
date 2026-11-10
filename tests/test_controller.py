@@ -979,7 +979,7 @@ async def test_unplug_never_releases_a_fault_or_stop_latch(latch):
     await spin(lambda: io.regs[POWER] == 0)
     assert not c.intent_enabled and c.export_state()[latch] is True
     assert not [v for _, a, v in io.writes if a in (CUR, POW) and v > 0]
-    assert (await c.async_enable()).outcome == "confirmed"   # explicit way out
+    assert (await c.async_enable(clear_hard=True)).outcome == "confirmed"   # a person's way out
     assert c.export_state()[latch] is False
 
 

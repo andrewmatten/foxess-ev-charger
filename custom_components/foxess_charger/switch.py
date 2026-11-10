@@ -109,7 +109,14 @@ class FoxESSChargingSwitch(_ControllerSwitch):
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._async_command(self.coordinator.controller.async_enable(), "start charging")
+        # A hard latch needs a person (a call with a user, not an automation)
+        # who could already see it in Home Assistant.
+        person = self._context is not None and self._context.user_id is not None
+        shown = (self.coordinator.data or {}).get("needs_human") is True
+        await self._async_command(
+            self.coordinator.controller.async_enable(clear_hard=person and shown),
+            "start charging",
+        )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         result = await self._async_command(

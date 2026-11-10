@@ -21,9 +21,9 @@ class SlowFake(FakeController):
         super().__init__(**kw)
         self.clock, self.delay = clock, delay
 
-    async def async_enable(self):
+    async def async_enable(self, *, clear_hard=False):
         self.clock["offset"] += self.delay
-        return await super().async_enable()
+        return await super().async_enable(clear_hard=clear_hard)
 
     async def async_set_power(self, raw):
         self.clock["offset"] += self.delay

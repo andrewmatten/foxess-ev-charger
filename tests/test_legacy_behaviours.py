@@ -136,7 +136,7 @@ async def test_hard_fault_mid_session_keeps_refreshing_never_goes_silent(rigs):
     assert rig.sim.positive_cap_writes(mark) == []
     assert rig.sim.measured_power_raw() == 0
     assert ctl.export_state()["safety_latched"] is True
-    result = await rig.run(ctl.async_enable())   # explicit recovery
+    result = await rig.run(ctl.async_enable(clear_hard=True))   # a person's recovery
     assert result.outcome == "confirmed" and rig.sim.holding[P] == CAP
 
 
