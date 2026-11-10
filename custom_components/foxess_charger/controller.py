@@ -72,14 +72,14 @@ SAFETY_FALLBACK_CURRENT_RAW = 60   # 6 A
 STOP_COMMAND = 2
 OBSERVATION_GAP_S = 1.0            # pause needs two agreeing reads this far apart
 POLL_STEP_S = 0.5
-# Auto-release of a fault latch (paused, see _note_link_health). A comms latch
-# releases after COMMS_LATCH_RELEASE_S healthy, doubled per release in the last
-# hour, at most COMMS_HOLD_MAX_S; other releasable causes after FAULT_RELEASE_S.
+# Auto-release of a fault latch (paused, see _note_link_health): after a
+# healthy hold of COMMS_LATCH_RELEASE_S (comms) or FAULT_RELEASE_S (fault,
+# stop_failed), doubled per release in the current streak, at most
+# RELEASE_HOLD_MAX_S. A streak ends once that long passes with no latch.
 COMMS_LATCH_RELEASE_S = 120
-COMMS_HOLD_MAX_S = 900
 FAULT_RELEASE_S = 600
+RELEASE_HOLD_MAX_S = 7200
 STOP_FALLBACK_CLEAR_S = 300        # quiet 'stopped' becomes a plain pause
-MAX_AUTO_RELEASES = 3              # per rolling 24 h, then a human must enable
 # Latch causes, by severity: a worse cause replaces a milder one, never back.
 # unknown = restored without a recorded cause; hard never auto-releases.
 LATCH_RANK = {"comms": 0, "fault": 1, "stop_failed": 2, "unknown": 2, "hard": 3}
@@ -278,8 +278,7 @@ class ChargingController:
         self._mismatch_count = 0
         self._link_ok_since: float | None = None  # latch release timer
         self._stop_ok_since: float | None = None  # stop fallback clear timer
-        # shortcut: in memory, so a restart forgets past releases; persist if restarts loop.
-        self._releases: list[float] = []         # auto-release times (clock)
+        self._releases: list[float] = []         # auto-release times of this streak (clock)
         self._wake = asyncio.Event()             # refresh interval shortened
         self._read_snapshot = read_snapshot
         self._intent = Intent()
@@ -347,17 +346,10 @@ class ChargingController:
     def latch_cause(self) -> str | None:
         return self._intent.latch_cause if self._intent.safety_latched else None
 
-    def _releases_within(self, seconds: float) -> int:
-        now = self._clock()
-        return sum(now - t < seconds for t in self._releases)
-
     @property
     def needs_human(self) -> bool:
-        """Latched and no auto-release will come: only an explicit enable helps."""
-        return self.latch_cause == "hard" or (
-            self._intent.safety_latched
-            and self._releases_within(86400) >= MAX_AUTO_RELEASES
-        )
+        """Hard latch: it never auto-releases, only an explicit enable helps."""
+        return self.latch_cause == "hard"
 
     @property
     def diagnostics(self) -> dict:
@@ -933,6 +925,9 @@ class ChargingController:
         never hold the zero back."""
         i = self._intent
         newly = self._worse(cause)
+        if newly and not i.safety_latched and self._releases \
+                and self._clock() - self._releases[-1] >= RELEASE_HOLD_MAX_S:
+            self._releases = []           # quiet long enough: a new streak
         if newly:
             self._link_ok_since = None
             self._intent = replace(
@@ -1118,9 +1113,9 @@ class ChargingController:
         A Stop fallback becomes a plain pause after STOP_FALLBACK_CLEAR_S of
         valid, fault-free, not-drawing frames. A fault latch releases, paused,
         once such frames and confirmed zero refreshes (polls pass None: they
-        cannot advance it) have lasted the hold for its cause; hard faults
-        and the MAX_AUTO_RELEASES cap stay latched (needs_human). Only an
-        explicit enable resumes charging."""
+        cannot advance it) have lasted the hold for its cause (_release_hold);
+        hard faults stay latched (needs_human). Only an explicit enable
+        resumes charging."""
         i = self._intent
         if (ev.drawing or _faulted(ev.status, ev.fault_code) or zero_confirmed is False
                 or _REASON_TELEMETRY in self._protect):
@@ -1145,20 +1140,21 @@ class ChargingController:
         if self._link_ok_since is None:
             self._link_ok_since = ev.at
             return
-        self._releases = [t for t in self._releases if self._clock() - t < 86400]
         cause = i.latch_cause
-        if cause == "comms":
-            hold = min(COMMS_LATCH_RELEASE_S * 2 ** self._releases_within(3600), COMMS_HOLD_MAX_S)
-        else:
-            hold = FAULT_RELEASE_S
-        if ev.at - self._link_ok_since < hold or self.needs_human:
+        hold = self._release_hold(cause)
+        if self.needs_human or ev.at - self._link_ok_since < hold:
             return
         self._link_ok_since = None
-        self._releases.append(self._clock())
+        # n >= 6 already holds every cause at the ceiling: keep the list bounded.
+        self._releases = [*self._releases, self._clock()][-6:]
         _LOGGER.warning(
             "FoxESS charger healthy for %d s; %s fault latch released, "
             "charging stays paused until enabled", hold, cause)
         await self._update(enabled=False, safety_latched=False, latch_cause=None)
+
+    def _release_hold(self, cause: str) -> float:
+        base = COMMS_LATCH_RELEASE_S if cause == "comms" else FAULT_RELEASE_S
+        return min(base * 2 ** len(self._releases), RELEASE_HOLD_MAX_S)
 
     def _maybe_correct(self, ev: _Evidence) -> None:
         """Charging while intent says off: re-assert zero (and Stop if needed)."""

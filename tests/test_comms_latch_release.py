@@ -5,18 +5,17 @@ and it stayed latched for ~21 h although the charger was healthy. 3.1.1
 released a comms-only latch after COMMS_LATCH_RELEASE_S of healthy link.
 Incident 2026-11-06 (twice): the link kept dropping single frames, each one
 restarting that timer, so the latch held for hours. Now the latch records
-its cause: comms (120 s, doubling per release in the last hour, max 15 min),
-self-clearing faults and failed Stops (10 min, at any hour)
-release; hard faults never do; at most MAX_AUTO_RELEASES per 24 h, then
-needs_human. A release always leaves charging paused.
+its cause: comms (120 s), self-clearing faults and failed Stops (10 min, at
+any hour) release, doubling per release in a streak up to 2 h (see
+test_release_backoff_313.py); hard faults never do (needs_human). A release
+always leaves charging paused.
 """
 from __future__ import annotations
 
 import pytest
 
 from custom_components.foxess_charger.controller import (
-    COMMS_HOLD_MAX_S, COMMS_LATCH_RELEASE_S, FAULT_RELEASE_S, MAX_AUTO_RELEASES,
-    STOP_FALLBACK_CLEAR_S, ControlError,
+    COMMS_LATCH_RELEASE_S, FAULT_RELEASE_S, STOP_FALLBACK_CLEAR_S, ControlError,
 )
 from custom_components.foxess_charger.transport import TransportError
 
@@ -200,10 +199,10 @@ async def test_drawing_or_sustained_invalid_frames_reset_release_timer():
     assert positive_writes(io) == []
 
 
-async def test_comms_hold_doubles_per_release_within_an_hour_and_caps():
+async def test_comms_hold_doubles_per_release_and_needs_no_human():
     c, io = await comms_latched()
     holds = []
-    for n in range(MAX_AUTO_RELEASES):
+    for n in range(3):
         start = io.clock.now
         await refresh(c, io, 1)
         while c.phase == "faulted":
@@ -212,12 +211,9 @@ async def test_comms_hold_doubles_per_release_within_an_hour_and_caps():
         await drop_link_during_enable(c, io)
     assert holds[0] < 2 * COMMS_LATCH_RELEASE_S
     assert holds[1] >= 2 * COMMS_LATCH_RELEASE_S and holds[2] >= 4 * COMMS_LATCH_RELEASE_S
-    # cap reached: the next latch stays, and a human is needed
-    assert c.needs_human and c.diagnostics["needs_human"]
-    await healthy_for(c, io, 2 * COMMS_HOLD_MAX_S)
-    assert c.phase == "faulted" and c.needs_human
-    io.clock.now += 86400                          # a day later the cap has lapsed
-    await healthy_for(c, io, COMMS_LATCH_RELEASE_S + 30)
+    # no daily cap: the 4th latch still releases, after the doubled hold
+    assert not c.needs_human and not c.diagnostics["needs_human"]
+    await healthy_for(c, io, 8 * COMMS_LATCH_RELEASE_S + 30)
     assert c.phase == "paused" and not c.needs_human
 
 
