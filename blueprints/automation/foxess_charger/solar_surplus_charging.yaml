@@ -262,7 +262,8 @@ action:
           # stopped, but an integration may defer the physical register
           # write; this automation cannot guarantee the charger accepted
           # the cap before starting. switch.turn_on is only issued when off,
-          # and never while the switch says a person must re-enable charging.
+          # and never while the switch says a person must re-enable charging
+          # or a latch is held (its release backoff decides when it clears).
           - conditions:
               - "{{ import_power < (import_ceiling_watts - hysteresis_watts) }}"
             sequence:
@@ -277,6 +278,7 @@ action:
               - if:
                   - "{{ switch_is_off }}"
                   - "{{ not state_attr(charging_switch, 'needs_human') }}"
+                  - "{{ not state_attr(charging_switch, 'latch_cause') }}"
                 then:
                   - action: switch.turn_on
                     target:
