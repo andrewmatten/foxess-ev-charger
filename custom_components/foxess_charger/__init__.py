@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_SCAN_INTERVAL
@@ -155,13 +156,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:  # noqa: BLE001 - must not mask the setup failure
             _LOGGER.exception("Error shutting down FoxESS coordinator")
         raise
-    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
+    entry.async_on_unload(entry.add_update_listener(_async_apply_options))
     return True
 
 
-async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """A new poll interval only takes effect through a full reload."""
-    await hass.config_entries.async_reload(entry.entry_id)
+async def _async_apply_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply options live: a reload would stop the power-cap refresh and the
+    charger would fall back to its own maximum. The select reads its option
+    from the entry, so listeners are notified to refresh availability."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator.update_interval = timedelta(
+        seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    )
+    coordinator.async_update_listeners()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
