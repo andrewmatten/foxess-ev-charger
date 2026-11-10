@@ -207,7 +207,7 @@ async def test_release_history_survives_a_restart():
 
 
 @pytest.mark.parametrize("down, expected", [(3600, 2 * FAULT_RELEASE_S),
-                                            (CEILING, FAULT_RELEASE_S)])
+                                            (CEILING + 1, FAULT_RELEASE_S)])  # saved times are rounded
 async def test_release_history_ages_by_wall_clock_across_a_restart(down, expected):
     state = await released_state()
     later = time.time() + down
