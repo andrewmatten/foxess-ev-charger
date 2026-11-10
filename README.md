@@ -8,7 +8,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxE
 
 Currently developed and tested against the **FoxESS A7300P1-E-B-WO** (7.3 kW, single-phase, 32 A max, 230 V).
 
-> **Three-phase models (11 kW / 22 kW) are untested.** The integration exposes the three-phase registers, but the phase-related entities are **disabled by default**. The manual phase selector only does anything if a separate FoxESS phase-switch box is fitted, so it also stays unavailable until you turn on *Phase-switch box fitted* in the integration options. Automatic phase switching is the charger's own function and does not need the box. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
+> **Three-phase models (11 kW / 22 kW).** Start, stop and current changes (6-32 A) were confirmed by a user on a 22 kW A022KP1 (issue #4, release 3.1.2); 11 kW models and all phase switching remain untested. The integration exposes the three-phase registers, but the phase-related entities are **disabled by default**. The manual phase selector only does anything if a separate FoxESS phase-switch box is fitted, so it also stays unavailable until you turn on *Phase-switch box fitted* in the integration options. Automatic phase switching is the charger's own function and does not need the box. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
 
 Entities disabled by default (three-phase models; the phase selector and phase sequence sensor also need a phase-switch box):
 
@@ -69,16 +69,46 @@ The scan interval is configurable via the integration options (default 10 s, ran
 - **Device triggers**: Vehicle Plugged In, Charging Started, Charging Stopped, Session Completed, Fault, Alarm — available from a device's own trigger picker when building automations, in addition to plain entity state triggers.
 - **Blueprint**: [`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`](blueprints/automation/foxess_charger/solar_surplus_charging.yaml) — holds grid import near a configurable ceiling by adjusting Max Charging Current. Grid power sensors must report W or kW; kW readings are converted to W, and unavailable, nonnumeric, or unsupported-unit readings stop charging. Its dwell timer is based on actual current changes, so the once-per-minute safety check does not prevent normal adjustments. When starting from stopped, Home Assistant calls the number service before the switch service, but the integration may defer the physical register write; the blueprint cannot guarantee the new limit is active before charging starts. Grid-limit/surplus control only; no tariff or cost logic.
 
+## When charging stops by itself
+
+The integration sets the power limit to zero and "latches" when it cannot trust the link or the charger reports a fault. The charging switch then reads off and shows `latch_cause` and `needs_human` attributes, and the "Charging Status Reason" sensor says why.
+
+- **`comms`**: lost or unconfirmed writes. Releases by itself after 2 min of healthy readings.
+- **`fault`**: a charger fault that can clear by itself (status 6 without fault bits, or only voltage, frequency, temperature, CP or meter-comms bits). Releases after 10 min of healthy readings and not drawing.
+- **`stop_failed`**: a Stop the charger did not confirm. Releases after 10 min of healthy readings and not drawing.
+- **`hard`**: emergency stop, PE, leakage, overcurrent, contactor, breaker, lock, metering and similar. Never releases by itself.
+
+Each release in a row doubles the wait, up to 2 hours. A release always leaves charging paused; it resumes on a normal turn-on (for example from an automation).
+
+**What to do**
+
+- `comms`, `fault`, `stop_failed`: nothing. It releases by itself, and your automation or you can turn charging on again.
+- `hard` (`needs_human: true`, Repairs notice): check the charger and clear the fault, then turn the charging switch on yourself from the dashboard or app. An automation cannot do it.
+
 ## Known limitations
 
 - **Some settings read as `65535` (0xFFFF) until a charge session starts.** *Allowed Charge Energy* and *Allowed Charge Time* report this sentinel/placeholder value when idle, meaning "no limit set" — it's expected charger behaviour per the protocol spec, not a bug. These display blank rather than `65535`.
 - **Port Temperature is not fitted on all models.** The A7300P1 returns the same `65535` sentinel, so the entity is disabled by default. Port over-temperature protection still works in firmware (fault bit 4) — only the live reading is missing.
 - *Max Charging Current* and *Max Charging Power* only take effect while the charger is in the **charging** state (per the protocol spec) — setting them earlier may be a no-op until a session actually starts, and both reset to the charger's max after each session ends.
-- Three-phase features and the phase-switch box are untested (see *Supported hardware* above).
+- Phase switching and the phase-switch box are untested (see *Supported hardware* above).
+- **Power limit falls back after about 60 s.** About 60 s after the integration's last write the charger falls back to its own maximum power. Avoid restarting Home Assistant or reloading the integration while the car is charging if a power limit matters (for example in a peak tariff window). Changing the integration's options no longer reloads it.
 
 ## Credits
 
 Originally based on [ringaction/foxess_charger](https://github.com/ringaction/foxess_charger), since rewritten. Thanks to the original author for the groundwork on the FoxESS Modbus protocol. This project adds its own session control, safety handling, energy guard, device triggers, blueprint and test suite.
+
+## Releasing
+
+Releases go through `scripts/release.sh`, which refuses to tag the wrong commit.
+Commit and push first. The manifest version and a `CHANGELOG.md` heading must already match.
+
+    scripts/release.sh 3.1.3-beta.1 --dry-run   # check only, nothing tagged
+    scripts/release.sh 3.1.3-beta.1             # beta: HEAD only needs to be pushed
+    scripts/release.sh 3.1.3 --dry-run
+    scripts/release.sh 3.1.3                    # stable: HEAD must be origin/main
+
+It fetches, runs the tests, then tags `v<version>` and pushes only that tag.
+Afterwards, publish the GitHub release (pre-release for a beta, with the changelog section for stable).
 
 ## AI assistance
 
