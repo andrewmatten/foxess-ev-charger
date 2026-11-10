@@ -48,6 +48,7 @@ class FakeIO:
         self.stop_works = True
         self.car_draw = True
         self.refuse: set[int] = set()
+        self.refuse_code = 3             # Modbus exception code for refused writes
         self.lose_reply: set[int] = set()
         self.ignore: set[int] = set()
         self.fail_reads = False
@@ -78,7 +79,7 @@ class FakeIO:
         await asyncio.sleep(0)
         self.writes.append((self.clock(), address, value))
         if address in self.refuse:
-            raise CommandRefused("refused")
+            raise CommandRefused("refused", self.refuse_code)
         if address not in self.ignore:
             self._apply(address, value)
         if address in self.lose_reply:
@@ -630,6 +631,56 @@ async def test_unconfirmed_safety_configuration_blocks_enable():
         await c.async_enable()
 
 
+async def _init_with_validity_refused(io, clock):
+    io.refuse.add(VALIDITY)
+    c = ChargingController(io, clock=clock, sleep=clock.sleep, read_snapshot=snapshot)
+    await c.async_initialize(saved(), configure_safety=True)
+    return c
+
+
+async def test_fixed_validity_model_can_charge_with_capped_refresh():
+    # Issue #4: A022KP1 answers exception 3 to every 0x3005 write and holds 180.
+    clock = FakeClock()
+    io = FakeIO(clock)
+    c = await _init_with_validity_refused(io, clock)
+    assert c.phase == "enabled" and io.regs[VALIDITY] == 180
+    assert io.regs[FALLBACK] == 60                  # the fallback is still enforced
+    assert c.diagnostics["reported_time_validity"] == 180
+    assert c.diagnostics["refresh_interval"] == 30  # not 90: real expiry may be 60 s
+    assert (await c.async_enable()).outcome == "confirmed"
+
+
+@pytest.mark.parametrize("held", [0, 181, 3600])
+async def test_refused_validity_with_implausible_value_still_blocks(held):
+    clock = FakeClock()
+    io = FakeIO(clock)
+    io.regs[VALIDITY] = held
+    c = await _init_with_validity_refused(io, clock)
+    assert c.phase == "faulted" and io.regs[POW] == 0
+    with pytest.raises(ControlError):
+        await c.async_enable()
+
+
+async def test_validity_refused_for_other_reason_still_blocks():
+    clock = FakeClock()
+    io = FakeIO(clock)
+    io.refuse_code = 6                              # device busy: may succeed later
+    c = await _init_with_validity_refused(io, clock)
+    assert c.phase == "faulted"
+    with pytest.raises(ControlError):
+        await c.async_enable()
+
+
+async def test_fixed_validity_model_still_needs_the_fallback_confirmed():
+    clock = FakeClock()
+    io = FakeIO(clock)
+    io.refuse.add(FALLBACK)
+    c = await _init_with_validity_refused(io, clock)
+    assert c.phase == "faulted"
+    with pytest.raises(ControlError):
+        await c.async_enable()
+
+
 async def test_restart_keeps_explicit_off_and_latches():
     c, io = await make()
     io.zero_pauses = False
@@ -741,12 +792,12 @@ async def test_enable_while_unplugged_is_staged_and_stays_on():
 async def test_safety_configuration_retried_until_confirmed():
     clock = FakeClock()
     io = FakeIO(clock)
-    io.refuse.add(VALIDITY)
+    io.ignore.add(VALIDITY)
     c = ChargingController(io, clock=clock, sleep=clock.sleep, read_snapshot=snapshot)
     await c.async_initialize(saved(), configure_safety=True)
     assert c.phase == "faulted"
     assert "safety_config_unconfirmed" in c.diagnostics["protective_reasons"]
-    io.refuse.clear()
+    io.ignore.clear()
     await c.async_start()
     await spin(lambda: io.regs[VALIDITY] == 60 and io.regs[FALLBACK] == 60)
     await spin(lambda: c.phase == "enabled")

@@ -43,6 +43,8 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Port      | Modbus TCP port — **default `502`**                |
 | Slave ID  | Modbus unit/slave ID (default `1`)                 |
 
+**Set the charger's Operation Mode to Modbus TCP in the FoxESS app.** If it is left on FoxCloud, the charger is read-only: the integration can read values but every write (start, stop, current, settings) is blocked.
+
 The connection is verified during setup — if the charger can't be reached, you'll see an error on the form immediately rather than a silently-broken entry.
 
 **The charger's Work Mode must be set to Plug&Charge.** Controlled and Locked modes will not start charging with this integration; Home Assistant raises a Repairs warning if the charger is in either.

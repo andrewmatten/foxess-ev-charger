@@ -62,6 +62,9 @@ LOW_POWER_RAW = 1                  # measured <= 0.1 kW counts as not drawing
 FIRMWARE_EXPIRY_S = 60
 MAX_REFRESH_S = 30
 SAFETY_VALIDITY_S = 60
+# Some models (A022KP1) refuse every 0x3005 write and hold their factory 180 s.
+MAX_FIXED_VALIDITY_S = 180
+MODBUS_ILLEGAL_DATA_VALUE = 3
 SAFETY_FALLBACK_CURRENT_RAW = 60   # 6 A
 STOP_COMMAND = 2
 OBSERVATION_GAP_S = 1.0            # pause needs two agreeing reads this far apart
@@ -294,6 +297,7 @@ class ChargingController:
         self._correction: asyncio.Task | None = None
         self._loop_task: asyncio.Task | None = None
         self._validity: int | None = None
+        self._last_refusal: tuple[int, int | None] | None = None
         self._last_error: str | None = None
         self.data: dict = {}
         self._counters = dict.fromkeys(
@@ -513,8 +517,9 @@ class ChargingController:
             # The write may still have applied; the next operation reads back.
             self._counters["unknown_outcomes"] += 1
             raise
-        except CommandRefused:
+        except CommandRefused as err:
             self._counters["refusals"] += 1
+            self._last_refusal = (address, err.code)
         except Exception as err:  # noqa: BLE001 - outcome unknown; read-back decides
             self._last_error = f"write 0x{address:04X}: {err}"
 
@@ -938,10 +943,15 @@ class ChargingController:
         register, no retries).
         """
         self._next_safety_try = self._clock() + self._refresh_interval()
+        self._last_refusal = None
         try:
-            await self._write_confirmed(
-                REG_TIME_VALIDITY, SAFETY_VALIDITY_S, None,
-                min(deadline, self._clock() + self._timeout))
+            try:
+                await self._write_confirmed(
+                    REG_TIME_VALIDITY, SAFETY_VALIDITY_S, None,
+                    min(deadline, self._clock() + self._timeout))
+            except ControlError:
+                if not await self._accept_fixed_validity():
+                    raise
             await self._write_confirmed(
                 REG_DEFAULT_CURRENT, SAFETY_FALLBACK_CURRENT_RAW, None,
                 min(deadline, self._clock() + self._timeout))
@@ -950,6 +960,21 @@ class ChargingController:
             _LOGGER.error("Safety configuration unconfirmed; enable blocked, will retry")
             return
         self._protect.discard(_REASON_SAFETY)
+
+    async def _accept_fixed_validity(self) -> bool:
+        """True if 0x3005 is not configurable on this model and the value it
+        holds is safe to run on: the refresh stays at half of FIRMWARE_EXPIRY_S
+        whatever it reports, and the 6 A fallback must still confirm."""
+        if self._last_refusal != (REG_TIME_VALIDITY, MODBUS_ILLEGAL_DATA_VALUE):
+            return False
+        regs = await self._read(REG_TIME_VALIDITY)
+        if regs is None or not 0 < regs[0] <= MAX_FIXED_VALIDITY_S:
+            return False
+        self._set_validity(regs[0])
+        _LOGGER.warning(
+            "Charger refuses Command Time Validity writes; using its fixed %s s",
+            regs[0])
+        return True
 
     async def _op_refresh(self) -> bool:
         async with self._lock:
