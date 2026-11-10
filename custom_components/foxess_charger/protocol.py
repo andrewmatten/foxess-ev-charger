@@ -75,7 +75,7 @@ from .modbus_client import decode_ascii
 from .transport import CommandRefused, RegisterIO, TransportError
 
 # Status 9 is a transitional phase-switching state (reported by three-phase
-# units while the phase box changes over). It keeps the session alive and is
+# units while the phases change over). It keeps the session alive and is
 # not evidence of Stop or unplug. 7 is listed as reserved in the register map
 # and is not a state the firmware documents emitting, so it is treated as
 # unknown.
@@ -267,7 +267,7 @@ class SnapshotReader:
 
     - Static identity is read until each string has been obtained once, then
       served from cache; it never costs a per-poll wire read afterwards.
-    - The phase box is polled until the device definitively refuses it
+    - The automatic phase switching block is polled until the device definitively refuses it
       (Modbus exception, as on single-phase units); after that it is no
       longer requested. Timeouts do not count as refusal.
     """

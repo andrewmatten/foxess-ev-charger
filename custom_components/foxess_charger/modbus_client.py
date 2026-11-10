@@ -414,7 +414,7 @@ class FoxESSModbusClient:
         """FC03 read; None on any failure.
 
         `quiet=True` logs an exception response at DEBUG, for reads expected
-        to be refused on some hardware (phase-switch-box on single-phase units).
+        to be refused on some hardware (the automatic phase switching block on single-phase units).
         """
         try:
             return self.read_registers_strict(address, count)
