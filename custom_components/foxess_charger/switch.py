@@ -160,7 +160,8 @@ class FoxESSLockSwitch(_ControllerSwitch):
 
 
 class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
-    """Automatic phase switching; needs the phase-switch box."""
+    """Automatic phase switching (0x300A): the charger's own function on
+    three-phase models. The manual phase command (0x4002) is what needs the box."""
 
     _attr_icon = "mdi:auto-fix"
     _attr_translation_key = "auto_phase_switch"
