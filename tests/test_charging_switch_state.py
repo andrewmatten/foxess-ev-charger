@@ -24,3 +24,18 @@ async def test_charging_switch_state_is_session_active_across_vehicle_pause(hass
         await coordinator.async_refresh()
         states.append(entity.is_on)
     assert states == [False, True, True, True, False]
+
+
+async def test_charging_switch_reads_off_while_latched_or_stopped(hass):
+    """A latch or Stop mid-session leaves status 4 and the stored enable:
+    the switch must still read off (review S3)."""
+    fake = FakeController(status=4)
+    coordinator = FoxESSChargerCoordinator(hass, fake, 10)
+    entity = FoxESSChargingSwitch(coordinator, MagicMock(entry_id="entry"))
+    await coordinator.async_refresh()
+    states = {}
+    for phase in ("enabled", "faulted", "stopped"):
+        fake.phase = phase
+        states[phase] = entity.is_on
+    assert fake.intent_enabled
+    assert states == {"enabled": True, "faulted": False, "stopped": False}
