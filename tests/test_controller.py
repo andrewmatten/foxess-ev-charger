@@ -859,23 +859,13 @@ async def test_phase_box_registers_confirmed_by_readback(address, value):
         await c.async_set_register(0x300B, 4)
 
 
-async def test_phase_switching_confirmed_by_phase_sequence():
+async def test_phase_switching_is_staged_not_confirmed():
+    # One write, no read-back proof: see test_phase_command_313.py.
     c, io = await make()
     result = await c.async_set_register(0x4002, 1)
-    assert result.outcome == "confirmed" and io.regs[0x1010] == 1
+    assert result.outcome == "staged" and io.regs[0x1010] == 1
     with pytest.raises(ValueError):
         await c.async_set_register(0x4002, 3)
-
-
-async def test_phase_switching_unconfirmable_raises():
-    c, io = await make()
-    io.ignore.add(0x4002)
-    with pytest.raises(ControlError):
-        await c.async_set_register(0x4002, 2)
-    io.ignore.clear()
-    io.fail_reads = True
-    with pytest.raises(ControlError):
-        await c.async_set_register(0x4002, 1)
 
 
 async def _failing_persist(_state):

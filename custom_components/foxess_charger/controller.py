@@ -37,7 +37,6 @@ from .const import (
     REG_LOCK_CONTROL,
     REG_LOCK_STATUS,
     REG_MIN_SWITCH_INTERVAL,
-    REG_PHASE_SEQUENCE,
     REG_PHASE_SWITCHING,
     REG_MAX_CHARGING_CURRENT,
     REG_MAX_CHARGING_POWER,
@@ -118,7 +117,6 @@ REGISTER_ALLOWLIST: dict[int, tuple[int, int]] = {
 # Write-only command registers: (status register proving it, expected value).
 WRITE_ONLY_CONFIRMATION: dict[int, tuple[int, Callable[[int], int]]] = {
     REG_LOCK_CONTROL: (REG_LOCK_STATUS, lambda v: v - 1),   # 1 unlock -> 0, 2 lock -> 1
-    REG_PHASE_SWITCHING: (REG_PHASE_SEQUENCE, lambda v: v),
 }
 
 # Only Plug&Charge (1) can start a session: this integration never sends 0x4001 Start.
@@ -1401,6 +1399,14 @@ class ChargingController:
         return await self._run(lambda: self._op_register(address, value))
 
     async def _op_register(self, address: int, value: int) -> CommandResult:
+        if address == REG_PHASE_SWITCHING:
+            # Sent once: no register proves it (without the phase-switch box
+            # 0x1010 already reads three-phase), and a resend would hold the lock.
+            async with self._lock:
+                acked = await self._send(address, value, None)
+            if not acked:
+                raise ControlError(f"0x{address:04X}={value} not acknowledged")
+            return CommandResult("staged", self._intent.revision)
         async with self._lock:
             deadline = self._clock() + self._timeout
             proof = WRITE_ONLY_CONFIRMATION.get(address)
