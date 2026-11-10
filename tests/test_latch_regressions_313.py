@@ -10,11 +10,13 @@ import time
 import pytest
 
 from custom_components.foxess_charger import controller as controller_module
-from custom_components.foxess_charger.controller import FAULT_RELEASE_S, ControlError
+from custom_components.foxess_charger.controller import (
+    COMMS_LATCH_RELEASE_S, FAULT_RELEASE_S, ControlError,
+)
 
 from custom_components.foxess_charger.transport import TransportError
 
-from test_comms_latch_release import FAULT_HI, FAULT_LO, cause, healthy_for, refresh
+from test_comms_latch_release import FAULT_LO, cause, comms_latched, healthy_for, refresh
 from test_controller import CTRL, POW, STATUS, make
 from test_fault_and_stop_fallback import drain, positive_writes
 
@@ -97,3 +99,25 @@ async def test_fault_status_still_drawing_after_zero_and_stop_is_stop_failed():
     with pytest.raises(ControlError, match="did not stop"):
         await c.async_pause()
     assert c.phase == "faulted" and cause(c) == "stop_failed"
+
+
+async def test_lost_zero_readback_does_not_restart_release_timer():
+    """One lost 0x3002 read-back per minute is no evidence either way: the
+    comms latch must still release (6 Nov pattern on the read-back path)."""
+    c, io = await comms_latched()
+    real_read = io.read
+    drop = [False]
+
+    async def read(address, count):
+        if drop[0] and address == POW:
+            raise TransportError("lost")
+        return await real_read(address, count)
+
+    io.read = read
+    await refresh(c, io, 1)                        # timer starts
+    for n in range(2 * COMMS_LATCH_RELEASE_S // 30):
+        drop[0] = n % 2 == 1                       # every other refresh, once a minute
+        await refresh(c, io, 30)
+    drop[0] = False
+    assert c.phase == "paused" and not c.intent_enabled
+    assert positive_writes(io) == []
