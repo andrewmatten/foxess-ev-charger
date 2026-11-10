@@ -82,3 +82,35 @@ async def test_unavailable_without_data(hass):
     assert entity.available is False
     assert entity.native_value is None
     assert entity.extra_state_attributes == {}
+
+
+async def _offline_after_good_poll(hass):
+    fake = _fake(status=3)
+    coordinator = FoxESSChargerCoordinator(hass, fake, 10)
+    await coordinator.async_refresh()
+    entity = _sensor(coordinator)
+    assert entity.native_value == "charging"
+
+    async def dead_link():  # what the real controller returns when the status read fails
+        return {}
+    real_poll, fake.async_poll = fake.async_poll, dead_link
+    return fake, coordinator, entity, real_poll
+
+
+async def test_dead_link_reads_offline_and_stays_available(hass):
+    _, coordinator, entity, _ = await _offline_after_good_poll(hass)
+    for _poll in range(4):  # from the first failed poll, past the point the coordinator gives up
+        await coordinator.async_refresh()
+        assert entity.native_value == "charger_offline"
+        assert entity.available is True
+        entity.extra_state_attributes  # must not raise
+
+
+async def test_offline_recovers_on_first_good_poll(hass):
+    fake, coordinator, entity, real_poll = await _offline_after_good_poll(hass)
+    await coordinator.async_refresh()
+    assert entity.native_value == "charger_offline"
+    fake.async_poll = real_poll
+    await coordinator.async_refresh()
+    assert entity.native_value == "charging"
+    assert entity.available is True
