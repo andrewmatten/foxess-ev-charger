@@ -459,3 +459,27 @@ async def test_nonnumeric_reading_with_valid_unit_fails_safe(hass, install_bluep
 
     assert h.turn_offs == 1
     assert h.number_writes == []
+
+
+@pytest.mark.parametrize("attrs, starts", [
+    ({"needs_human": True}, False),    # hard latch: only a person may clear it
+    ({"needs_human": False}, True),
+    ({}, True),                        # a switch from another integration
+])
+async def test_surplus_never_turns_on_a_switch_that_needs_a_person(
+    hass, install_blueprint, attrs, starts,
+):
+    h = Harness(hass)
+    await h.async_register()
+    with freeze_time(T0) as frozen:
+        h.set_number(10)
+        hass.states.async_set(SWITCH, "off", attrs)
+        h.set_grid(-2000)
+        await hass.async_block_till_done()
+        await _setup(hass)
+
+        frozen.move_to(T0 + timedelta(minutes=3))
+        h.set_grid(-2001)
+        await hass.async_block_till_done()
+
+    assert h.turn_ons == (1 if starts else 0)
