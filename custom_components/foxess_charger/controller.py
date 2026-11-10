@@ -395,6 +395,8 @@ class ChargingController:
             "current_raw": i.current_raw, "revision": i.revision,
             "safety_latched": i.safety_latched, "stop_fallback": i.stop_fallback,
             "latch_cause": i.latch_cause,
+            # 3.1.1/3.1.2 read only this: without it a rollback keeps a comms latch forever.
+            "comms_latch": i.safety_latched and i.latch_cause == "comms",
             # Epoch seconds: the monotonic clock restarts with the process.
             "latch_releases": [round(wall - (now - t), 1) for t in self._releases],
         }
