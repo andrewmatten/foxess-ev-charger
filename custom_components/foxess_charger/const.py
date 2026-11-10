@@ -49,9 +49,10 @@ CONF_PHASE_BOX_FITTED = "phase_box_fitted"  # option: a FoxESS phase-switch box 
 
 # Single batched FC03 read covering the whole status+energy+fault+RFID block
 # (0x1000–0x101D inclusive, 30 registers) - confirmed safe on single-phase
-# hardware: unlike 0x3000-0x300B (see REG_AUTO_PHASE_SWITCH below), nothing
-# in this range is phase-switch-box-only, so merging it into one request
-# cannot reproduce the Round 2 Illegal Data Address bug. Cuts what used to
+# hardware: unlike 0x300A-0x300B (see REG_AUTO_PHASE_SWITCH below), which
+# single-phase models may refuse to read, nothing in this range is refused,
+# so merging it into one request cannot reproduce the Round 2 Illegal Data
+# Address bug. Cuts what used to
 # be 5 separate Modbus round trips per poll (status block + 4x UINT32 reads)
 # down to 1.
 REG_STATUS_BLOCK_START = 0x1000
@@ -74,7 +75,7 @@ REG_L2_CURRENT = 0x100C
 REG_L3_CURRENT = 0x100D
 REG_ACTIVE_POWER = 0x100E       # power being delivered, 0.1 kW
 REG_LOCK_STATUS = 0x100F        # connector lock, LOCK_STATUS_MAP
-REG_PHASE_SEQUENCE = 0x1010     # phases in use (phase-switch box), PHASE_SEQ_MAP
+REG_PHASE_SEQUENCE = 0x1010     # phases in use, PHASE_SEQ_MAP; only means something with a phase-switch box
 REG_MAX_POWER = 0x1011          # supported power range, 0.1 kW
 REG_MIN_POWER = 0x1012
 REG_MAX_CURRENT = 0x1013        # supported current range, 0.1 A
@@ -107,15 +108,16 @@ REG_ALLOWED_CHARGE_ENERGY = 0x3004  # session energy limit, kWh; 65535 = none se
 # interval is a separate concern from this register's own valid range.
 REG_TIME_VALIDITY = 0x3005
 REG_DEFAULT_CURRENT = 0x3006        # fallback current once the caps lapse, 0.1 A (6-32 A)
-# 0x3007-0x3009 are reserved. The next two only exist with the external
-# phase-switch box; single-phase units refuse to read them.
+# 0x3007-0x3009 are reserved. The next two are the charger's own automatic
+# phase switching (three-phase models; no phase-switch box needed).
+# Single-phase units may refuse to read them.
 REG_AUTO_PHASE_SWITCH = 0x300A      # automatic phase switching, 1 = on
 REG_MIN_SWITCH_INTERVAL = 0x300B    # minimum minutes between switches (5-30)
 
 # Command registers: write-only, FC06.
 REG_LOCK_CONTROL = 0x4000       # 1 = unlock, 2 = lock the connector
 REG_CHARGING_CONTROL = 0x4001   # 1 = start, 2 = stop the session
-REG_PHASE_SWITCHING = 0x4002    # target phases: same codes as PHASE_SEQ_MAP
+REG_PHASE_SWITCHING = 0x4002    # manual phase command, same codes as PHASE_SEQ_MAP; does nothing without a phase-switch box
 REG_RESTART = 0x4003            # writing 0xA5A5 reboots the charger
 
 # ── Code tables ──────────────────────────────────────────────────────────────
@@ -398,7 +400,7 @@ ENERGY_REJECT_WARN_INTERVAL_S = 3600
 # default (see FoxESSBlockAvailabilityMixin in __init__.py).
 BLOCK_STATUS    = "status"     # 0x1000-0x101D: status/energy/fault/RFID batch
 BLOCK_CONFIG    = "config"     # 0x3000-0x3006: R/W config registers
-BLOCK_PHASE_BOX = "phase_box"  # 0x300A-0x300B: phase-switch-box only
+BLOCK_PHASE_BOX = "phase_box"  # 0x300A-0x300B: automatic phase switching; may fail to read on single-phase models
 
 # A block's last successful read must be within this many scan intervals to
 # be considered fresh. 3x mirrors MAX_STATUS_READ_FAILURES's "3 consecutive

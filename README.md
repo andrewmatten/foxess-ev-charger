@@ -8,9 +8,9 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxE
 
 Currently developed and tested against the **FoxESS A7300P1-E-B-WO** (7.3 kW, single-phase, 32 A max, 230 V).
 
-> **Three-phase models (11 kW / 22 kW) are untested.** The integration exposes the three-phase registers, but the phase-related entities are **disabled by default** because there is no support yet for the external phase-switching-box accessory that those features depend on. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
+> **Three-phase models (11 kW / 22 kW) are untested.** The integration exposes the three-phase registers, but the phase-related entities are **disabled by default**. The manual phase selector only does anything if a separate FoxESS phase-switch box is fitted, so it also stays unavailable until you turn on *Phase-switch box fitted* in the integration options. Automatic phase switching is the charger's own function and does not need the box. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
 
-Entities disabled by default (phase-switch-box / three-phase only):
+Entities disabled by default (three-phase models; the phase selector and phase sequence sensor also need a phase-switch box):
 
 - `select.*_phase_sequence`
 - `switch.*_auto_phase_switch` and `binary_sensor.*_auto_phase_switch`
@@ -74,7 +74,7 @@ The scan interval is configurable via the integration options (default 10 s, ran
 - **Some settings read as `65535` (0xFFFF) until a charge session starts.** *Allowed Charge Energy* and *Allowed Charge Time* report this sentinel/placeholder value when idle, meaning "no limit set" — it's expected charger behaviour per the protocol spec, not a bug. These display blank rather than `65535`.
 - **Port Temperature is not fitted on all models.** The A7300P1 returns the same `65535` sentinel, so the entity is disabled by default. Port over-temperature protection still works in firmware (fault bit 4) — only the live reading is missing.
 - *Max Charging Current* and *Max Charging Power* only take effect while the charger is in the **charging** state (per the protocol spec) — setting them earlier may be a no-op until a session actually starts, and both reset to the charger's max after each session ends.
-- Three-phase / phase-switch-box features are untested (see *Supported hardware* above).
+- Three-phase features and the phase-switch box are untested (see *Supported hardware* above).
 
 ## Credits
 

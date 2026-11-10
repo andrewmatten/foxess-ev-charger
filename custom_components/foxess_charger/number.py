@@ -134,7 +134,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=5, native_max_value=30, native_step=1,
         register=REG_MIN_SWITCH_INTERVAL, reading_key="min_switch_interval",
-        entity_registry_enabled_default=False,  # needs the phase-switch box
+        entity_registry_enabled_default=False,  # three-phase models only
         block=BLOCK_PHASE_BOX,
     ),
 )

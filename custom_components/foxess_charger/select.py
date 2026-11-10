@@ -1,4 +1,4 @@
-"""Select platform: work mode and (phase-switch box) phase selection.
+"""Select platform: work mode and manual phase selection (needs a phase-switch box).
 
 Each select shows one enum register and changes it through the controller,
 which confirms the new value by reading the charger back.

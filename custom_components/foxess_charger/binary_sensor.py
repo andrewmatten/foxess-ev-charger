@@ -96,7 +96,7 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorEntityDescription, ...] = (
     FoxESSBinarySensorEntityDescription(
         key="auto_phase_switch", name="Auto Phase Switch", translation_key="auto_phase_switch",
         icon="mdi:auto-fix",
-        entity_registry_enabled_default=False,  # needs the phase-switch box
+        entity_registry_enabled_default=False,  # three-phase models only
         block=BLOCK_PHASE_BOX,
         value_fn=lambda data: data.get("auto_phase_switch") == 1,
     ),
