@@ -14,7 +14,7 @@ from custom_components.foxess_charger.controller import FAULT_RELEASE_S, Control
 
 from custom_components.foxess_charger.transport import TransportError
 
-from test_comms_latch_release import cause, healthy_for, refresh
+from test_comms_latch_release import FAULT_HI, FAULT_LO, cause, healthy_for, refresh
 from test_controller import CTRL, POW, STATUS, make
 from test_fault_and_stop_fallback import drain, positive_writes
 
@@ -65,3 +65,35 @@ async def test_replay_6_nov_lost_zero_then_successful_stop_recovers_unattended()
         await refresh(c, io, 30)
     assert c.phase == "paused" and not c.intent_enabled
     assert positive_writes(io) == []
+
+
+async def test_pause_during_soft_fault_does_not_escalate_to_stop_failed():
+    """Status 6 with no power (overvoltage) is not drawing: a pause confirms
+    without the Stop sequence, and the fault latch releases once it clears."""
+    c, io = await make()
+    io.status_override = 6
+    io.regs[FAULT_LO] = 1 << 1                     # overvoltage, self-clearing
+    io.car_draw = False
+    await c.async_poll()
+    await drain(c)
+    assert cause(c) == "fault"
+    await c.async_pause()                          # an automation turns the switch off
+    assert cause(c) == "fault"
+    assert [v for _, a, v in io.writes if a == CTRL] == []
+    io.status_override = None                      # fault clears
+    io.regs[FAULT_LO] = 0
+    io.car_draw = True
+    await healthy_for(c, io, FAULT_RELEASE_S - 30)
+    assert c.phase == "faulted"
+    await refresh(c, io, 30)
+    assert c.phase == "paused" and not c.intent_enabled
+    assert positive_writes(io) == []
+
+
+async def test_fault_status_still_drawing_after_zero_and_stop_is_stop_failed():
+    c, io = await make()
+    io.status_override = 6                         # fault status but power still 7 kW
+    io.zero_pauses, io.stop_works = False, False
+    with pytest.raises(ControlError, match="did not stop"):
+        await c.async_pause()
+    assert c.phase == "faulted" and cause(c) == "stop_failed"
