@@ -73,6 +73,11 @@ ENERGY_ABS_MAX_KWH = 100_000.0
 # read timing/rounding, not a real non-zero baseline.
 NEAR_ZERO_RAW_UNITS = 2
 
+# Without a confirmed session boundary, a near-zero value must be seen on this
+# many consecutive polls before it is believed: one garbage poll mid-session
+# must not zero the session counter.
+NEAR_ZERO_CONFIRM_POLLS = 3
+
 # A rolling window's worth of accepted deltas is checked against what the
 # charger's rated max could actually have delivered over that window (see
 # check_cumulative_window below) - catches a sustained corruption of exactly
@@ -110,6 +115,7 @@ def decide_energy_reading(
     max_power_kw: float,
     allow_decrease: bool,
     session_boundary: bool = False,
+    near_zero_polls: int = NEAR_ZERO_CONFIRM_POLLS,
 ) -> EnergyGuardDecision:
     """Decides whether `raw` is a plausible next reading for a counter.
 
@@ -135,6 +141,10 @@ def decide_energy_reading(
     reset actually looks like). Any other decrease (e.g. an unexplained
     mid-session drop) is rejected exactly like any other implausible
     reading, the same as a lifetime counter's decrease already is.
+
+    `near_zero_polls` is how many consecutive polls (including this one) the
+    caller has seen at/near zero; the weak signal only counts from
+    NEAR_ZERO_CONFIRM_POLLS. The default treats a direct call as confirmed.
 
     `key` is accepted (and unused beyond identifying the counter to the
     caller) purely so call sites and log messages have it on hand; the
@@ -168,7 +178,9 @@ def decide_energy_reading(
         # values copied from a previous session.
         boundary_max_raw = max_plausible_delta
         plausible_reset = session_boundary and raw <= boundary_max_raw
-        near_zero_reset = raw <= NEAR_ZERO_RAW_UNITS
+        near_zero_reset = (
+            raw <= NEAR_ZERO_RAW_UNITS and near_zero_polls >= NEAR_ZERO_CONFIRM_POLLS
+        )
         implausible = not (allow_decrease and (plausible_reset or near_zero_reset))
     else:
         implausible = delta > max_plausible_delta

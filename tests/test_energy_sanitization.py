@@ -100,16 +100,16 @@ class TestSessionBoundaryCrossReference:
         assert coordinator.data["current_energy_raw"] == 530
         assert len(coordinator.energy.rejections) == 1
 
-    async def test_decrease_to_zero_is_still_accepted_without_a_confirmed_boundary(self, hass):
+    async def test_decrease_to_zero_is_accepted_once_seen_on_three_polls(self, hass):
         fake = FakeController(status=3)
         fake.hw["current_energy_raw"] = 176
         clock = Clock()
         coordinator = await _coordinator(hass, fake, clock)
-        clock.t += 13
         fake.hw["current_energy_raw"] = 0
-        await coordinator.async_refresh()
-        assert coordinator.data["current_energy_raw"] == 0
-        assert coordinator.energy.rejections == []
+        for expected in (176, 176, 0):           # a lone zero is a glitch, three are a reset
+            clock.t += 13
+            await coordinator.async_refresh()
+            assert coordinator.data["current_energy_raw"] == expected
 
 
 # ── 2. first observation ──────────────────────────────────────────────────
@@ -192,8 +192,8 @@ class TestSessionBoundaryDoesNotPoisonTheWindow:
             assert sanitize(tracker, "current_energy_raw", raw) == raw
             clock.t += 300.0
         clock.t = 2000.0
-        # Near-zero reset, no confirmed boundary: accepted on the weak signal.
-        assert sanitize(tracker, "current_energy_raw", 0) == 0
+        # A session-boundary reset to zero.
+        assert sanitize(tracker, "current_energy_raw", 0, boundary=True) == 0
         after_reset = self._polls_until_window_trips(tracker, clock, 0)
 
         fresh, fresh_clock = make_tracker(Clock(2000.0))
@@ -203,7 +203,7 @@ class TestSessionBoundaryDoesNotPoisonTheWindow:
     def test_reset_does_not_mask_a_later_corrupt_spike(self):
         tracker, clock = make_tracker()
         seed(tracker, "current_energy_raw", 530, at=0.0)
-        assert sanitize(tracker, "current_energy_raw", 0) == 0
+        assert sanitize(tracker, "current_energy_raw", 0, boundary=True) == 0
         clock.t = 15.0
         assert sanitize(tracker, "current_energy_raw", 1000) is None  # +100 kWh in 15 s
         assert tracker.rejections[-1]["rejected_kwh"] == 100.0

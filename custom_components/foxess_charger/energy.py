@@ -48,6 +48,8 @@ class EnergyTracker:
         self._offset: dict[str, int] = {}
         # In-progress suspected counter reset: first/last raw + ts, poll count.
         self._reset_candidate: dict[str, dict] = {}
+        # Consecutive polls at/near zero, for counters that may reset.
+        self._near_zero_polls: dict[str, int] = {}
         self._last_warned: dict[str, float] = {}
         self.rejections: list[dict] = []
         self.dirty = False
@@ -109,9 +111,11 @@ class EnergyTracker:
         max_power_kw = self._max_power_kw(data)
         raw_in = raw
         raw = raw_in + self._offset.get(key, 0)      # offset-adjusted from here on
+        near_zero_polls = self._near_zero_polls.get(key, 0) + 1 if raw <= NEAR_ZERO_RAW_UNITS else 0
+        self._near_zero_polls[key] = near_zero_polls
         decision = decide_energy_reading(
             key, raw, prev, prev_ts, now, max_power_kw, allow_decrease,
-            session_boundary=session_boundary,
+            session_boundary=session_boundary, near_zero_polls=near_zero_polls,
         )
         if not decision.accepted:
             if (not allow_decrease and prev is not None and raw < prev
