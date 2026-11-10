@@ -7,3 +7,13 @@ __pycache__/
 .DS_Store
 .worktrees/
 .superpowers/
+venv/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+*.log
+secrets.env
+.env
