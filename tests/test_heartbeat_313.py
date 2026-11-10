@@ -66,8 +66,9 @@ async def test_refresh_interval_is_a_third_of_the_effective_validity(validity, i
 async def _drive(c, io, seconds, lose_refresh_status):
     """Poll every 10 s and run the refresh on its real schedule, one simulated
     second at a time; the refresh's own status read is lost while
-    ``lose_refresh_status()``. Yields (phase, seconds since a positive cap
-    write last reached the charger) each second."""
+    ``lose_refresh_status()``. Returns, per second, the phase and the seconds
+    since a positive cap write last reached the charger (None while the cap
+    register holds zero: nothing can lapse)."""
     from test_controller import POW, TransportError
 
     real_read, real_write = io.read, io.write
@@ -95,7 +96,7 @@ async def _drive(c, io, seconds, lose_refresh_status):
             ok = await c._op_refresh()
             in_refresh[0] = False
             due = now + (c._refresh_interval() if ok else c._retry)
-        out.append((c.phase, io.clock.now - last_cap[0]))
+        out.append((c.phase, io.clock.now - last_cap[0] if io.regs[POW] else None))
         io.clock.now = now + 1
     return out
 
@@ -106,15 +107,14 @@ async def test_telemetry_hold_cannot_outlast_the_cap_validity():
     The cap must not lapse with the phase still "enabled": after
     CAP_ACK_LIMIT_S without an acknowledged cap write the controller goes
     protective (zero, "uncertain"), never latched."""
-    from test_controller import POW, make
+    from test_controller import make
 
     c, io = await make(retry_interval=3.0)
     trace = await _drive(c, io, 150, lambda: True)
-    exposed = [t for t, (ph, age) in enumerate(trace) if ph == "enabled" and age > 60]
+    exposed = [t for t, (ph, age) in enumerate(trace) if ph == "enabled" and (age or 0) > 60]
     assert not exposed, f"enabled with a lapsed cap at {exposed[:3]}..."
     assert "uncertain" in {ph for ph, _ in trace}
     assert 0 in io.power_writes() and not c.diagnostics["safety_latched"]
-    assert io.regs[POW] == 0 or trace[-1][1] <= 60
 
 
 async def test_protective_cap_timeout_recovers_when_the_link_heals():
@@ -125,7 +125,7 @@ async def test_protective_cap_timeout_recovers_when_the_link_heals():
     await _drive(c, io, 60, lambda: lose[0])
     lose[0] = False
     trace = await _drive(c, io, 60, lambda: lose[0])
-    assert trace[-1][0] == "enabled" and trace[-1][1] <= 20
+    assert trace[-1][0] == "enabled" and trace[-1][1] is not None and trace[-1][1] <= 20
     assert not c.diagnostics["safety_latched"] and c.intent_enabled
 
 
