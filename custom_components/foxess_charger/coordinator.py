@@ -81,6 +81,8 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         self.energy = EnergyTracker()
         self.sessions = SessionTracker(on_complete=self._fire_session_completed)
         self._status_failures = 0
+        self._offline_since: float | None = None  # monotonic start of the current outage
+        self._persist_failing: set[str] = set()  # stores whose last save failed
         self._wrong_work_mode: int | None = None  # unsupported mode currently reported
         self._block_last_success: dict[str, float] = {}
         self._block_success_count: dict[str, int] = {}
@@ -103,14 +105,27 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
                     self.sessions.export(), rearm_required=self.sessions.rearm_required,
                 )
                 self.sessions.dirty = False
-            except Exception:  # noqa: BLE001 - stays dirty, retried next poll
-                _LOGGER.exception("Could not persist FoxESS session state")
+                self._persist_ok("session")
+            except Exception as err:  # noqa: BLE001 - stays dirty, retried next poll
+                self._persist_failed("session state", "session", err)
         if force or self.energy.dirty:
             try:
                 await self._storage.async_save_energy(self.energy.export())
                 self.energy.dirty = False
-            except Exception:  # noqa: BLE001 - stays dirty, retried next poll
-                _LOGGER.exception("Could not persist FoxESS energy baseline")
+                self._persist_ok("energy")
+            except Exception as err:  # noqa: BLE001 - stays dirty, retried next poll
+                self._persist_failed("energy baseline", "energy", err)
+
+    def _persist_failed(self, what: str, key: str, err: Exception) -> None:
+        # Log the first failure (with traceback); stay quiet while it keeps failing.
+        if key not in self._persist_failing:
+            self._persist_failing.add(key)
+            _LOGGER.exception("Could not persist FoxESS %s: %s", what, err)
+
+    def _persist_ok(self, key: str) -> None:
+        if key in self._persist_failing:
+            self._persist_failing.discard(key)
+            _LOGGER.info("FoxESS %s saving works again", key)
 
     async def async_flush(self) -> None:
         """Persist everything now (used on unload)."""
@@ -119,10 +134,12 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
     # ── polling ──────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict:
+        poll_error: Exception | None = None
         try:
             observation = await self.controller.async_poll()
         except Exception as err:  # noqa: BLE001 - the status block is mandatory
-            _LOGGER.warning("FoxESS poll failed: %s", err)
+            _LOGGER.debug("FoxESS poll failed: %s", err)
+            poll_error = err
             observation = {}
         if not isinstance(observation, dict):
             observation = {}
@@ -147,13 +164,27 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
 
         if fresh[BLOCK_STATUS]:
             self._status_failures = 0
+            if self._offline_since is not None:
+                _LOGGER.info(
+                    "FoxESS charger is back after being offline for %d seconds",
+                    time.monotonic() - self._offline_since,
+                )
+                self._offline_since = None
             self.energy.apply(data, session_boundary=self.sessions.is_boundary(data))
             self.sessions.update(data, intent_enabled=self._intent_enabled())
         else:
             self._status_failures += 1
-            _LOGGER.warning(
-                "Could not read FoxESS status block (%d consecutive)", self._status_failures,
-            )
+            if self._offline_since is None:
+                self._offline_since = now
+                _LOGGER.warning(
+                    "Could not read FoxESS status block (%s); further failures are "
+                    "logged at debug level until it recovers",
+                    poll_error or "no reply",
+                )
+            else:
+                _LOGGER.debug(
+                    "Could not read FoxESS status block (%d consecutive)", self._status_failures,
+                )
             if self.data is None or self._status_failures >= MAX_STATUS_READ_FAILURES:
                 raise UpdateFailed(
                     f"Charger unreachable: status block failed {self._status_failures} "

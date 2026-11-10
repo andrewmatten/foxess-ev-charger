@@ -57,4 +57,4 @@ async def test_store_failure_logs_once_then_recovery_once(hass, caplog):
     await coordinator._async_persist()
     coordinator.energy.dirty = True
     await coordinator._async_persist()
-    assert len([r for r in lines(caplog, logging.INFO) if "persist" in r.getMessage()]) == 1
+    assert len([r for r in lines(caplog, logging.INFO) if "saving works again" in r.getMessage()]) == 1
