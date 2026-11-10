@@ -85,8 +85,9 @@ LATCH_RANK = {"comms": 0, "fault": 1, "stop_failed": 2, "unknown": 2, "hard": 3}
 SELF_CLEARING_FAULT_MASK = sum(1 << b for b in (1, 2, 4, 7, 8, 14, 16))
 
 VALID_STATUS = {0, 1, 2, 3, 4, 5, 6, 8, 9}
-PAUSED_STATUS = {0, 1, 4, 5}       # acceptable after a zero setpoint
-STOPPED_STATUS = {0, 1, 5}         # acceptable after 0x4001 Stop
+# Fault (6) with no power is not drawing either; the latch handles the fault.
+PAUSED_STATUS = {0, 1, 4, 5, 6}    # acceptable after a zero setpoint
+STOPPED_STATUS = {0, 1, 5, 6}      # acceptable after 0x4001 Stop
 SESSION_STATUS = {2, 3, 4, 9}      # enable succeeded (9 = phase switching)
 DRAWING_STATUS = {2, 3}
 REFUSING_STATUS = {6, 8}           # fault, locked
