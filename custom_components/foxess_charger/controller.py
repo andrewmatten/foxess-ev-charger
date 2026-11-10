@@ -504,8 +504,9 @@ class ChargingController:
         code = regs[FAULT_OFFSET] << 16 | regs[FAULT_OFFSET + 1]
         return _Evidence(regs[3], regs[5], regs[14], regs[15], self._clock(), code)
 
-    async def _send(self, address: int, value: int, wire: tuple | None) -> None:
-        """Dispatch one write; the latest-intent check is the last step before I/O."""
+    async def _send(self, address: int, value: int, wire: tuple | None) -> bool:
+        """Dispatch one write; the latest-intent check is the last step before I/O.
+        True if the charger acknowledged it (a normal Modbus reply)."""
         self._check(wire)
         try:
             await self._io.write(address, value)
@@ -520,6 +521,9 @@ class ChargingController:
             self._last_refusal = (address, err.code)
         except Exception as err:  # noqa: BLE001 - outcome unknown; read-back decides
             self._last_error = f"write 0x{address:04X}: {err}"
+        else:
+            return True
+        return False
 
     async def _write_once(self, address: int, value: int, wire: tuple | None) -> bool:
         await self._send(address, value, wire)
@@ -1035,10 +1039,14 @@ class ChargingController:
                                        (REG_MAX_CHARGING_POWER, power)):
                     if value is None:
                         continue
-                    await self._send(address, value, wire)
+                    acked = await self._send(address, value, wire)
                     back = await self._read(address)
                     good = back is not None and back[0] == value
-                    ok = ok and good
+                    # The register already holds a refreshed cap, so its read-back
+                    # cannot prove this write landed: without an ack, retry soon.
+                    # Mismatch tracking stays read-back only, so a lossy link
+                    # latches no sooner than before.
+                    ok = ok and good and (acked or address != REG_MAX_CHARGING_POWER or not value)
                     # An unreadable read-back is unconfirmed, not fine: same
                     # latch window as a wrong read-back.
                     seen = True
