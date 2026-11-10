@@ -172,6 +172,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     coordinator = runtime["coordinator"]
     coordinator.async_clear_work_mode_issue()
+    coordinator.async_clear_needs_human_issue()
     await coordinator.async_shutdown()
     await runtime["controller"].async_close()
     await coordinator.async_flush()

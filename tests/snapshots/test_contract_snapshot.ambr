@@ -15396,6 +15396,8 @@
         'entity.switch.lock.name': 'Sperre',
       }),
       'issues': dict({
+        'issues.needs_human.description': 'Der Charger hat einen Fehler gemeldet, der sich nicht von selbst behebt, daher bleibt das Laden ausgeschaltet. Prüfen Sie den Charger und das Fahrzeug. Wenn es sicher ist, schalten Sie den Ladeschalter selbst wieder ein, um fortzufahren.',
+        'issues.needs_human.title': 'Charger benötigt Ihre Aufmerksamkeit',
       }),
       'keys': list([
         'config.abort.already_configured',
@@ -15505,6 +15507,8 @@
         'entity.switch.auto_phase_switch.name',
         'entity.switch.charging.name',
         'entity.switch.lock.name',
+        'issues.needs_human.description',
+        'issues.needs_human.title',
         'options.error.scan_interval_too_high',
         'options.error.scan_interval_too_low',
         'options.step.init.data.scan_interval',
@@ -15613,6 +15617,8 @@
         'entity.switch.lock.name': 'Lock',
       }),
       'issues': dict({
+        'issues.needs_human.description': 'The charger reported a fault that will not clear by itself, so charging stays off. Check the charger and the car. When it is safe, turn the Charging switch on yourself to resume.',
+        'issues.needs_human.title': 'Charger needs your attention',
         'issues.wrong_work_mode.description': "The charger's Work Mode is set to {mode}. This integration only works with Plug&Charge: in any other mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge (Work Mode select on the charger device).",
         'issues.wrong_work_mode.title': 'Charger Work Mode must be Plug&Charge',
       }),
@@ -15724,6 +15730,8 @@
         'entity.switch.auto_phase_switch.name',
         'entity.switch.charging.name',
         'entity.switch.lock.name',
+        'issues.needs_human.description',
+        'issues.needs_human.title',
         'issues.wrong_work_mode.description',
         'issues.wrong_work_mode.title',
         'options.error.scan_interval_too_high',

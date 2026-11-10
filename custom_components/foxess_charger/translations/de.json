@@ -34,6 +34,12 @@
       "scan_interval_too_high": "Das Aktualisierungsintervall darf höchstens 300 Sekunden betragen."
     }
   },
+  "issues": {
+    "needs_human": {
+      "title": "Charger benötigt Ihre Aufmerksamkeit",
+      "description": "Der Charger hat einen Fehler gemeldet, der sich nicht von selbst behebt, daher bleibt das Laden ausgeschaltet. Prüfen Sie den Charger und das Fahrzeug. Wenn es sicher ist, schalten Sie den Ladeschalter selbst wieder ein, um fortzufahren."
+    }
+  },
   "entity": {
     "sensor": {
       "software_version": {

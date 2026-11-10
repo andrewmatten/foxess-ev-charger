@@ -84,6 +84,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         self._offline_since: float | None = None  # monotonic start of the current outage
         self._persist_failing: set[str] = set()  # stores whose last save failed
         self._wrong_work_mode: int | None = None  # unsupported mode currently reported
+        self._needs_human_issue = False  # repair issue currently raised
         self._block_last_success: dict[str, float] = {}
         self._block_success_count: dict[str, int] = {}
         super().__init__(
@@ -199,6 +200,7 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         if "active_alarms" not in observation:
             data["active_alarms"] = decode_bitmask(data.get("alarm_code"), ALARM_BITS, "alarm_code")
         self._add_controller_view(data)
+        self._sync_needs_human_issue(data["needs_human"])
         if fresh[BLOCK_CONFIG]:
             self._sync_work_mode_issue(data.get("work_mode"))
         await self._async_persist()
@@ -229,6 +231,33 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
     def async_clear_work_mode_issue(self) -> None:
         self._wrong_work_mode = None
         ir.async_delete_issue(self.hass, DOMAIN, self._work_mode_issue_id)
+
+    @property
+    def _needs_human_issue_id(self) -> str:
+        return f"needs_human_{self.entry_id}"
+
+    def _sync_needs_human_issue(self, needed: bool) -> None:
+        """Raise the repair issue while a person must re-enable charging;
+        touch the registry only when that changes. Never raises."""
+        if needed == self._needs_human_issue:
+            return
+        try:
+            if needed:
+                ir.async_create_issue(
+                    self.hass, DOMAIN, self._needs_human_issue_id,
+                    is_fixable=False, severity=ir.IssueSeverity.ERROR,
+                    translation_key="needs_human",
+                )
+            else:
+                ir.async_delete_issue(self.hass, DOMAIN, self._needs_human_issue_id)
+        except Exception:  # noqa: BLE001 - a repair notice must not break polling
+            _LOGGER.exception("Could not update the FoxESS repair issue")
+            return
+        self._needs_human_issue = needed
+
+    def async_clear_needs_human_issue(self) -> None:
+        self._needs_human_issue = False
+        ir.async_delete_issue(self.hass, DOMAIN, self._needs_human_issue_id)
 
     def _intent_enabled(self) -> bool | None:
         value = getattr(self.controller, "intent_enabled", None)
