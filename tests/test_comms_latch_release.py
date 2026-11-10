@@ -217,7 +217,8 @@ async def test_comms_hold_doubles_per_release_and_needs_no_human():
     assert c.phase == "paused" and not c.needs_human
 
 
-@pytest.mark.parametrize("extra", [{}, {"comms_latch": "yes"}, {"latch_cause": "bogus"}])
+@pytest.mark.parametrize("extra", [{}, {"comms_latch": "yes"}, {"latch_cause": "bogus"},
+                                   {"latch_cause": "unknown"}])
 async def test_restored_latch_with_unknown_cause_stays_latched(extra):
     """A legacy latch may have been earth leakage / contactor / emergency stop:
     unclassified means manual only (Codex review 2026-11-07)."""
