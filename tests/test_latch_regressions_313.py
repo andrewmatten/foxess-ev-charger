@@ -12,8 +12,11 @@ import pytest
 from custom_components.foxess_charger import controller as controller_module
 from custom_components.foxess_charger.controller import FAULT_RELEASE_S, ControlError
 
-from test_comms_latch_release import cause, healthy_for
-from test_controller import make
+from custom_components.foxess_charger.transport import TransportError
+
+from test_comms_latch_release import cause, healthy_for, refresh
+from test_controller import CTRL, POW, STATUS, make
+from test_fault_and_stop_fallback import drain, positive_writes
 
 
 async def test_failed_stop_releases_after_ten_minutes_at_any_hour(monkeypatch):
@@ -29,3 +32,36 @@ async def test_failed_stop_releases_after_ten_minutes_at_any_hour(monkeypatch):
     await healthy_for(c, io, FAULT_RELEASE_S + 30)
     assert c.phase == "paused" and not c.intent_enabled
     assert not hasattr(controller_module, "NO_RELEASE_HOURS")
+
+
+async def test_replay_6_nov_lost_zero_then_successful_stop_recovers_unattended():
+    """Only the 0x3002 exchange fails for a while during a pause; 0x4001 Stop
+    works and the charger sits at status 5. That Stop succeeded: it must not
+    be recorded as stop_failed, and the controller must reach a plain pause."""
+    c, io = await make()
+    real_read = io.read
+    bad = [True]
+
+    async def read(address, count):
+        if bad[0] and address == POW:
+            raise TransportError("read-back lost")
+        return await real_read(address, count)
+
+    async def lost(value):
+        if bad[0]:
+            raise TransportError("write lost")
+
+    io.read, io.hooks[POW] = read, lost
+    with pytest.raises(ControlError):
+        await c.async_pause()
+    bad[0] = False                                 # ~10 s later the link is fine
+    await drain(c)
+    assert any(a == CTRL for _, a, _ in io.writes) and io.regs[STATUS] == 5
+    state = c.export_state()
+    assert state["stop_fallback"] and cause(c) != "stop_failed"
+    start = io.clock.now
+    await refresh(c, io, 1)
+    while c.phase != "paused" and io.clock.now - start < 600:
+        await refresh(c, io, 30)
+    assert c.phase == "paused" and not c.intent_enabled
+    assert positive_writes(io) == []
