@@ -49,3 +49,14 @@ async def test_unacknowledged_heartbeats_do_not_latch_a_lossy_link_sooner(rigs):
     await rig.clock.advance(60)
     assert ctl.phase == "enabled" and not ctl.diagnostics["safety_latched"]
     assert rig.sim.state == CHARGING
+
+
+@pytest.mark.parametrize("validity, interval", [(60, 20.0), (180, 20.0), (30, 10.0), (None, 3.0)])
+async def test_refresh_interval_is_a_third_of_the_effective_validity(validity, interval):
+    """About 13 attempts (20 s + 3 s retries) fit before the 60 s expiry, not two."""
+    from test_controller import make
+
+    c, _ = await make()
+    c._validity = validity
+    assert c._refresh_interval() == interval
+    assert c.diagnostics["refresh_interval"] == interval

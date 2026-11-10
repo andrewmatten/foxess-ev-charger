@@ -464,15 +464,15 @@ async def _write_times(c, io, count):
     return [t for t, a, _ in io.writes if a == POW][:count]
 
 
-async def test_refresh_every_30s_even_when_validity_reports_180():
+async def test_refresh_every_20s_even_when_validity_reports_180():
     c, io = await make()
     times = await _write_times(c, io, 4)
-    assert [round(b - a, 3) for a, b in zip(times, times[1:])] == [30.0] * 3
+    assert [round(b - a, 3) for a, b in zip(times, times[1:])] == [20.0] * 3
 
 
-async def test_refresh_is_half_of_a_short_validity():
+async def test_refresh_is_a_third_of_a_short_validity():
     c, io = await make()
-    io.regs[VALIDITY] = 20
+    io.regs[VALIDITY] = 30
     times = await _write_times(c, io, 4)
     assert [round(b - a, 3) for a, b in zip(times[1:], times[2:])] == [10.0] * 2
 
