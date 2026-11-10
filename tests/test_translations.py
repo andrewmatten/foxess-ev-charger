@@ -102,6 +102,7 @@ class TestEnumSensorsDeclareUnknownOption:
         added to _ENUM_SENSOR_MAPS above, rather than the coverage below
         silently not checking it."""
         enum_keys = {d.key for d in SENSORS if d.device_class == SensorDeviceClass.ENUM}
+        enum_keys.discard("charging_status_reason")  # not a register map; see test_status_reason_313
         assert enum_keys == set(_ENUM_SENSOR_MAPS)
 
     def test_options_include_unknown(self):

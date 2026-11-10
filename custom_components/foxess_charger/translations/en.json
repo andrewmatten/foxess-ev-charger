@@ -176,6 +176,23 @@
       },
       "transport_errors": {
         "name": "Transport Errors"
+      },
+      "charging_status_reason": {
+        "name": "Charging Status Reason",
+        "state": {
+          "charger_offline": "Charger offline",
+          "needs_attention": "Needs your attention",
+          "stop_failed": "Stop not confirmed, retrying",
+          "charger_fault": "Charger fault, retrying",
+          "link_problem": "Connection problem, retrying",
+          "link_uncertain": "Connection uncertain, charging held off",
+          "car_not_connected": "Car not connected",
+          "charger_locked": "Charger is locked",
+          "charging_off": "Charging switched off",
+          "waiting_for_car": "Waiting for the car",
+          "starting": "Starting",
+          "charging": "Charging"
+        }
       }
     },
     "binary_sensor": {

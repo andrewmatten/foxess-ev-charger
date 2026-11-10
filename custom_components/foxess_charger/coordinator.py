@@ -245,6 +245,9 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         data["energy_rejection_log"] = self.energy.rejections[-5:]
         data["intent_enabled"] = self._intent_enabled()
         data["control_phase"] = getattr(self.controller, "phase", None)
+        data["needs_human"] = getattr(self.controller, "needs_human", False) is True
+        data["latch_cause"] = getattr(self.controller, "latch_cause", None)
+        data["latch_release_in"] = diag.get("latch_release_in")
         data["desired_power_raw"] = getattr(self.controller, "desired_power_raw", None)
         data["desired_current_raw"] = getattr(self.controller, "desired_current_raw", None)
 

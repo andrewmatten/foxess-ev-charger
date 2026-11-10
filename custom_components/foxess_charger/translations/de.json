@@ -170,6 +170,23 @@
       },
       "transport_errors": {
         "name": "Übertragungsfehler"
+      },
+      "charging_status_reason": {
+        "name": "Grund für Ladestatus",
+        "state": {
+          "charger_offline": "Charger offline",
+          "needs_attention": "Benötigt Ihre Aufmerksamkeit",
+          "stop_failed": "Stopp nicht bestätigt, neuer Versuch",
+          "charger_fault": "Charger-Fehler, neuer Versuch",
+          "link_problem": "Verbindungsproblem, neuer Versuch",
+          "link_uncertain": "Verbindung unsicher, Laden gesperrt",
+          "car_not_connected": "Fahrzeug nicht verbunden",
+          "charger_locked": "Charger ist gesperrt",
+          "charging_off": "Laden ausgeschaltet",
+          "waiting_for_car": "Wartet auf das Fahrzeug",
+          "starting": "Startet",
+          "charging": "Lädt"
+        }
       }
     },
     "binary_sensor": {

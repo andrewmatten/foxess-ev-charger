@@ -5602,6 +5602,88 @@
     'state': '6.9',
   })
 # ---
+# name: test_registry_and_state_contract[de][sensor.contractentry01_charging_status_reason-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': set({
+    }),
+    'area_id': None,
+    'capabilities': dict({
+      'options': list([
+        'charger_offline',
+        'needs_attention',
+        'stop_failed',
+        'charger_fault',
+        'link_problem',
+        'link_uncertain',
+        'car_not_connected',
+        'charger_locked',
+        'charging_off',
+        'waiting_for_car',
+        'starting',
+        'charging',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'sensor',
+    'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+    'entity_id': 'sensor.foxess_charger_grund_fur_ladestatus',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Grund für Ladestatus',
+    'options': dict({
+    }),
+    'original_device_class': <SensorDeviceClass.ENUM: 'enum'>,
+    'original_icon': 'mdi:help-circle-outline',
+    'original_name': 'Grund für Ladestatus',
+    'platform': 'foxess_charger',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'charging_status_reason',
+    'unique_id': 'contractentry01_charging_status_reason',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_registry_and_state_contract[de][sensor.contractentry01_charging_status_reason-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'device_class': 'enum',
+      'friendly_name': 'FoxESS Charger Grund für Ladestatus',
+      'icon': 'mdi:help-circle-outline',
+      'latch_cause': None,
+      'needs_human': False,
+      'options': list([
+        'charger_offline',
+        'needs_attention',
+        'stop_failed',
+        'charger_fault',
+        'link_problem',
+        'link_uncertain',
+        'car_not_connected',
+        'charger_locked',
+        'charging_off',
+        'waiting_for_car',
+        'starting',
+        'charging',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.foxess_charger_grund_fur_ladestatus',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'charging',
+  })
+# ---
 # name: test_registry_and_state_contract[de][sensor.contractentry01_cp_status-entry]
   EntityRegistryEntrySnapshot({
     'aliases': set({
@@ -8420,6 +8502,88 @@
     'state': '6.9',
   })
 # ---
+# name: test_registry_and_state_contract[en][sensor.contractentry01_charging_status_reason-entry]
+  EntityRegistryEntrySnapshot({
+    'aliases': set({
+    }),
+    'area_id': None,
+    'capabilities': dict({
+      'options': list([
+        'charger_offline',
+        'needs_attention',
+        'stop_failed',
+        'charger_fault',
+        'link_problem',
+        'link_uncertain',
+        'car_not_connected',
+        'charger_locked',
+        'charging_off',
+        'waiting_for_car',
+        'starting',
+        'charging',
+      ]),
+    }),
+    'config_entry_id': <ANY>,
+    'config_subentry_id': <ANY>,
+    'device_class': None,
+    'device_id': <ANY>,
+    'disabled_by': None,
+    'domain': 'sensor',
+    'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+    'entity_id': 'sensor.foxess_charger_charging_status_reason',
+    'has_entity_name': True,
+    'hidden_by': None,
+    'icon': None,
+    'id': <ANY>,
+    'labels': set({
+    }),
+    'name': None,
+    'object_id_base': 'Charging Status Reason',
+    'options': dict({
+    }),
+    'original_device_class': <SensorDeviceClass.ENUM: 'enum'>,
+    'original_icon': 'mdi:help-circle-outline',
+    'original_name': 'Charging Status Reason',
+    'platform': 'foxess_charger',
+    'previous_unique_id': None,
+    'suggested_object_id': None,
+    'supported_features': 0,
+    'translation_key': 'charging_status_reason',
+    'unique_id': 'contractentry01_charging_status_reason',
+    'unit_of_measurement': None,
+  })
+# ---
+# name: test_registry_and_state_contract[en][sensor.contractentry01_charging_status_reason-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'device_class': 'enum',
+      'friendly_name': 'FoxESS Charger Charging Status Reason',
+      'icon': 'mdi:help-circle-outline',
+      'latch_cause': None,
+      'needs_human': False,
+      'options': list([
+        'charger_offline',
+        'needs_attention',
+        'stop_failed',
+        'charger_fault',
+        'link_problem',
+        'link_uncertain',
+        'car_not_connected',
+        'charger_locked',
+        'charging_off',
+        'waiting_for_car',
+        'starting',
+        'charging',
+      ]),
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.foxess_charger_charging_status_reason',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'charging',
+  })
+# ---
 # name: test_registry_and_state_contract[en][sensor.contractentry01_cp_status-entry]
   EntityRegistryEntrySnapshot({
     'aliases': set({
@@ -10825,6 +10989,155 @@
           'attributes': dict({
           }),
           'value': 0.0,
+        }),
+      }),
+    }),
+    'charging_status_reason': dict({
+      'available_when_coordinator_failed': False,
+      'available_when_stale': dict({
+        'config': True,
+        'phase_box': True,
+        'status': True,
+      }),
+      'device_class': <SensorDeviceClass.ENUM: 'enum'>,
+      'device_info': dict({
+        'identifiers': set({
+          tuple(
+            'foxess_charger',
+            'valuesentry',
+          ),
+        }),
+        'manufacturer': 'FoxESS',
+        'model': 'A7300P1-E-B-WO',
+        'name': 'FoxESS Charger',
+      }),
+      'enabled_default': True,
+      'entity_category': <EntityCategory.DIAGNOSTIC: 'diagnostic'>,
+      'has_entity_name': True,
+      'icon': 'mdi:help-circle-outline',
+      'long_service_context': False,
+      'name': 'raises AttributeError',
+      'options': list([
+        'charger_offline',
+        'needs_attention',
+        'stop_failed',
+        'charger_fault',
+        'link_problem',
+        'link_uncertain',
+        'car_not_connected',
+        'charger_locked',
+        'charging_off',
+        'waiting_for_car',
+        'starting',
+        'charging',
+      ]),
+      'state_class': None,
+      'translation_key': 'charging_status_reason',
+      'unique_id': 'valuesentry_charging_status_reason',
+      'unit': None,
+      'values': dict({
+        'charging': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charging',
+        }),
+        'edge_of_bounds': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'empty': dict({
+          'attributes': dict({
+          }),
+          'value': None,
+        }),
+        'fault': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charger_fault',
+        }),
+        'fault_status_only': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charger_fault',
+        }),
+        'idle': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'missing_keys': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charging',
+        }),
+        'none_values': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charger_offline',
+        }),
+        'paused_by_vehicle': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'phase_switching': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'sentinels': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charger_offline',
+        }),
+        'three_phase_a011': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'three_phase_a022': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'waiting_for_car',
+        }),
+        'unknown_enums': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'charger_offline',
+        }),
+        'zeros': dict({
+          'attributes': dict({
+            'latch_cause': None,
+            'needs_human': False,
+          }),
+          'value': 'car_not_connected',
         }),
       }),
     }),
@@ -15011,6 +15324,19 @@
         'entity.sensor.cc_status.state.disconnected': 'Nicht verbunden',
         'entity.sensor.cc_status.state.unknown': 'Unbekannt',
         'entity.sensor.charging_power.name': 'Ladeleistung',
+        'entity.sensor.charging_status_reason.name': 'Grund für Ladestatus',
+        'entity.sensor.charging_status_reason.state.car_not_connected': 'Fahrzeug nicht verbunden',
+        'entity.sensor.charging_status_reason.state.charger_fault': 'Charger-Fehler, neuer Versuch',
+        'entity.sensor.charging_status_reason.state.charger_locked': 'Charger ist gesperrt',
+        'entity.sensor.charging_status_reason.state.charger_offline': 'Charger offline',
+        'entity.sensor.charging_status_reason.state.charging': 'Lädt',
+        'entity.sensor.charging_status_reason.state.charging_off': 'Laden ausgeschaltet',
+        'entity.sensor.charging_status_reason.state.link_problem': 'Verbindungsproblem, neuer Versuch',
+        'entity.sensor.charging_status_reason.state.link_uncertain': 'Verbindung unsicher, Laden gesperrt',
+        'entity.sensor.charging_status_reason.state.needs_attention': 'Benötigt Ihre Aufmerksamkeit',
+        'entity.sensor.charging_status_reason.state.starting': 'Startet',
+        'entity.sensor.charging_status_reason.state.stop_failed': 'Stopp nicht bestätigt, neuer Versuch',
+        'entity.sensor.charging_status_reason.state.waiting_for_car': 'Wartet auf das Fahrzeug',
         'entity.sensor.cp_status.name': 'CP Status',
         'entity.sensor.cp_status.state.12v_disconnected': '12V (Nicht verbunden)',
         'entity.sensor.cp_status.state.6v_ready': '6V (Ladebereit)',
@@ -15109,6 +15435,19 @@
         'entity.sensor.cc_status.state.disconnected',
         'entity.sensor.cc_status.state.unknown',
         'entity.sensor.charging_power.name',
+        'entity.sensor.charging_status_reason.name',
+        'entity.sensor.charging_status_reason.state.car_not_connected',
+        'entity.sensor.charging_status_reason.state.charger_fault',
+        'entity.sensor.charging_status_reason.state.charger_locked',
+        'entity.sensor.charging_status_reason.state.charger_offline',
+        'entity.sensor.charging_status_reason.state.charging',
+        'entity.sensor.charging_status_reason.state.charging_off',
+        'entity.sensor.charging_status_reason.state.link_problem',
+        'entity.sensor.charging_status_reason.state.link_uncertain',
+        'entity.sensor.charging_status_reason.state.needs_attention',
+        'entity.sensor.charging_status_reason.state.starting',
+        'entity.sensor.charging_status_reason.state.stop_failed',
+        'entity.sensor.charging_status_reason.state.waiting_for_car',
         'entity.sensor.cp_status.name',
         'entity.sensor.cp_status.state.12v_disconnected',
         'entity.sensor.cp_status.state.6v_ready',
@@ -15202,6 +15541,19 @@
         'entity.sensor.cc_status.state.disconnected': 'Disconnected',
         'entity.sensor.cc_status.state.unknown': 'Unrecognized',
         'entity.sensor.charging_power.name': 'Charging Power',
+        'entity.sensor.charging_status_reason.name': 'Charging Status Reason',
+        'entity.sensor.charging_status_reason.state.car_not_connected': 'Car not connected',
+        'entity.sensor.charging_status_reason.state.charger_fault': 'Charger fault, retrying',
+        'entity.sensor.charging_status_reason.state.charger_locked': 'Charger is locked',
+        'entity.sensor.charging_status_reason.state.charger_offline': 'Charger offline',
+        'entity.sensor.charging_status_reason.state.charging': 'Charging',
+        'entity.sensor.charging_status_reason.state.charging_off': 'Charging switched off',
+        'entity.sensor.charging_status_reason.state.link_problem': 'Connection problem, retrying',
+        'entity.sensor.charging_status_reason.state.link_uncertain': 'Connection uncertain, charging held off',
+        'entity.sensor.charging_status_reason.state.needs_attention': 'Needs your attention',
+        'entity.sensor.charging_status_reason.state.starting': 'Starting',
+        'entity.sensor.charging_status_reason.state.stop_failed': 'Stop not confirmed, retrying',
+        'entity.sensor.charging_status_reason.state.waiting_for_car': 'Waiting for the car',
         'entity.sensor.cp_status.name': 'CP Status',
         'entity.sensor.cp_status.state.12v_disconnected': '12V (Disconnected)',
         'entity.sensor.cp_status.state.6v_ready': '6V (Ready)',
@@ -15302,6 +15654,19 @@
         'entity.sensor.cc_status.state.disconnected',
         'entity.sensor.cc_status.state.unknown',
         'entity.sensor.charging_power.name',
+        'entity.sensor.charging_status_reason.name',
+        'entity.sensor.charging_status_reason.state.car_not_connected',
+        'entity.sensor.charging_status_reason.state.charger_fault',
+        'entity.sensor.charging_status_reason.state.charger_locked',
+        'entity.sensor.charging_status_reason.state.charger_offline',
+        'entity.sensor.charging_status_reason.state.charging',
+        'entity.sensor.charging_status_reason.state.charging_off',
+        'entity.sensor.charging_status_reason.state.link_problem',
+        'entity.sensor.charging_status_reason.state.link_uncertain',
+        'entity.sensor.charging_status_reason.state.needs_attention',
+        'entity.sensor.charging_status_reason.state.starting',
+        'entity.sensor.charging_status_reason.state.stop_failed',
+        'entity.sensor.charging_status_reason.state.waiting_for_car',
         'entity.sensor.cp_status.name',
         'entity.sensor.cp_status.state.12v_disconnected',
         'entity.sensor.cp_status.state.6v_ready',

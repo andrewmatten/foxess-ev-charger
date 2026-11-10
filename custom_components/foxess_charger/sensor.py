@@ -52,6 +52,7 @@ from .const import (
     get_capabilities,
 )
 from .protocol import STATUS_PHASE_SWITCHING
+from .session import valid_status
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -178,6 +179,48 @@ def _transport_details(data: Observation) -> dict:
     return details
 
 
+# Why the car is not charging, first match wins. A latch that clears by
+# itself is named by its cause; any other cause counts as a charger fault.
+_LATCH_REASONS = {"stop_failed": "stop_failed", "comms": "link_problem"}
+STATUS_REASONS = (
+    "charger_offline", "needs_attention", "stop_failed", "charger_fault", "link_problem",
+    "link_uncertain", "car_not_connected", "charger_locked", "charging_off", "waiting_for_car",
+    "starting", "charging",
+)
+
+
+def _status_reason(data: Observation) -> str:
+    status = valid_status(data)
+    cause, phase = data.get("latch_cause"), data.get("control_phase")
+    if status is None or data.get("status_block_ok") is False:
+        return "charger_offline"
+    if data.get("needs_human"):
+        return "needs_attention"
+    if cause:
+        return _LATCH_REASONS.get(cause, "charger_fault")
+    if status == 6:  # the charger itself reports a fault
+        return "charger_fault"
+    if phase in ("uncertain", "faulted"):  # protective zero, link or cap unconfirmed
+        return "link_uncertain"
+    if status == 0 or data.get("cc_status") == 0:
+        return "car_not_connected"
+    if status == 8:  # the charger refuses to charge
+        return "charger_locked"
+    if data.get("intent_enabled") is False or phase in ("paused", "paused_below_minimum", "stopped"):
+        return "charging_off"
+    if status == 3:
+        return "charging"
+    return "starting" if status == 2 else "waiting_for_car"
+
+
+def _status_reason_attrs(data: Observation) -> dict:
+    attrs = {"latch_cause": data.get("latch_cause"), "needs_human": bool(data.get("needs_human"))}
+    retry = data.get("latch_release_in")
+    if isinstance(retry, (int, float)) and not isinstance(retry, bool):
+        attrs["auto_retry_in"] = retry
+    return attrs
+
+
 def _enum_options(table: dict[int, str]) -> list[str]:
     return [*table.values(), "unknown"]
 
@@ -274,6 +317,15 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         key="stop_reason", name="Stop Reason", translation_key="stop_reason",
         icon="mdi:information",
         value_fn=_decoded("stop_reason", STOP_REASON_MAP, enum=False),
+    ),
+    # One answer to "why is the car not charging right now?". Not tied to a
+    # register block, so it can still say the charger is offline.
+    FoxESSSensorEntityDescription(
+        key="charging_status_reason", name="Charging Status Reason",
+        translation_key="charging_status_reason", icon="mdi:help-circle-outline",
+        device_class=SensorDeviceClass.ENUM, options=list(STATUS_REASONS),
+        entity_category=EntityCategory.DIAGNOSTIC, block=None,
+        value_fn=_status_reason, attrs_fn=_status_reason_attrs,
     ),
     # Temperatures. -40..120 °C is far outside anything the electronics can
     # reach yet well inside what a corrupt register decodes to.

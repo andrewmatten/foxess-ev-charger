@@ -75,6 +75,7 @@ EXPECTED_ENTITIES = {
     ('sensor', 'stop_reason'): dict(entity_id='sensor.foxess_charger_stop_reason', translation_key='stop_reason', name='Stop Reason', unit=None, device_class=None, entity_category=None, enabled_default=True, capabilities=None),
     ('sensor', 'total_energy'): dict(entity_id='sensor.foxess_charger_total_energy', translation_key='total_energy', name='Total Energy', unit='kWh', device_class='energy', entity_category=None, enabled_default=True, capabilities={'state_class': 'total_increasing'}),
     ('sensor', 'transport_errors'): dict(entity_id='sensor.foxess_charger_transport_errors', translation_key='transport_errors', name='Transport Errors', unit=None, device_class=None, entity_category='diagnostic', enabled_default=True, capabilities={'state_class': 'measurement'}),
+    ('sensor', 'charging_status_reason'): dict(entity_id='sensor.foxess_charger_charging_status_reason', translation_key='charging_status_reason', name='Charging Status Reason', unit=None, device_class='enum', entity_category='diagnostic', enabled_default=True, capabilities={'options': ['charger_offline', 'needs_attention', 'stop_failed', 'charger_fault', 'link_problem', 'link_uncertain', 'car_not_connected', 'charger_locked', 'charging_off', 'waiting_for_car', 'starting', 'charging']}),
     ('sensor', 'work_mode_sensor'): dict(entity_id='sensor.foxess_charger_work_mode', translation_key='work_mode', name='Work Mode', unit=None, device_class='enum', entity_category=None, enabled_default=True, capabilities={'options': ['controlled', 'plug_and_charge', 'locked', 'unknown']}),
     ('switch', 'auto_phase_switch'): dict(entity_id='switch.foxess_charger_auto_phase_switch', translation_key='auto_phase_switch', name='Auto Phase Switch', unit=None, device_class=None, entity_category=None, enabled_default=False, capabilities=None),
     ('switch', 'charging'): dict(entity_id='switch.foxess_charger_charging', translation_key='charging', name='Charging', unit=None, device_class=None, entity_category=None, enabled_default=True, capabilities=None),
@@ -140,6 +141,7 @@ async def test_entity_registry_inventory(hass, enable_custom_integrations):
             assert got == want, key
             if (
                 key[0] == "sensor" and want_caps and "options" in want_caps
+                and key[1] != "charging_status_reason"  # new in 3.1.3: exact options, no "unknown"
             ):
                 # Enum sensors: existing options keep their order; the
                 # trailing "unknown" may be preceded by newly-added states.
