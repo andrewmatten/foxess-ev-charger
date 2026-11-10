@@ -409,7 +409,7 @@ class ChargingController:
         v = self._validity
         if not _is_int(v) or v <= 0:
             return min(self._retry, MAX_REFRESH_S)
-        return min(min(v, FIRMWARE_EXPIRY_S) / 2, MAX_REFRESH_S)
+        return min(min(v, FIRMWARE_EXPIRY_S) / 3, MAX_REFRESH_S)
 
     # ── intent changes ───────────────────────────────────────────────────
     async def _update(self, **changes) -> Intent:
@@ -964,7 +964,7 @@ class ChargingController:
 
     async def _accept_fixed_validity(self) -> bool:
         """True if 0x3005 is not configurable on this model and the value it
-        holds is safe to run on: the refresh stays at half of FIRMWARE_EXPIRY_S
+        holds is safe to run on: the refresh stays at a third of FIRMWARE_EXPIRY_S
         whatever it reports, and the 6 A fallback must still confirm."""
         if self._last_refusal != (REG_TIME_VALIDITY, MODBUS_ILLEGAL_DATA_VALUE):
             return False

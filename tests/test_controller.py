@@ -617,7 +617,7 @@ async def test_safety_configuration_written_and_read_back():
     await c.async_initialize(saved(), configure_safety=True)
     assert io.regs[VALIDITY] == 60 and io.regs[FALLBACK] == 60
     assert c.phase == "enabled"
-    assert c.diagnostics["refresh_interval"] == 30
+    assert c.diagnostics["refresh_interval"] == 20
 
 
 async def test_unconfirmed_safety_configuration_blocks_enable():
@@ -646,7 +646,7 @@ async def test_fixed_validity_model_can_charge_with_capped_refresh():
     assert c.phase == "enabled" and io.regs[VALIDITY] == 180
     assert io.regs[FALLBACK] == 60                  # the fallback is still enforced
     assert c.diagnostics["reported_time_validity"] == 180
-    assert c.diagnostics["refresh_interval"] == 30  # not 90: real expiry may be 60 s
+    assert c.diagnostics["refresh_interval"] == 20  # not 60: real expiry may be 60 s
     assert (await c.async_enable()).outcome == "confirmed"
 
 
