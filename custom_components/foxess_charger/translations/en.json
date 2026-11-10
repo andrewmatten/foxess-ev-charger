@@ -25,7 +25,11 @@
       "init": {
         "title": "Charger options",
         "data": {
-          "scan_interval": "Scan interval in seconds"
+          "scan_interval": "Scan interval in seconds",
+          "phase_box_fitted": "Phase-switch box fitted"
+        },
+        "data_description": {
+          "phase_box_fitted": "Turn on only if a FoxESS phase-switch box is installed. Without one, the manual phase selector does nothing."
         }
       }
     },

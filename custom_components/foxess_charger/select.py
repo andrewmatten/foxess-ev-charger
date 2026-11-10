@@ -17,6 +17,7 @@ from .adapter_api import ControlError
 from .const import (
     BLOCK_CONFIG,
     BLOCK_STATUS,
+    CONF_PHASE_BOX_FITTED,
     DOMAIN,
     PHASE_SEQ_MAP,
     REG_PHASE_SWITCHING,
@@ -98,10 +99,12 @@ class FoxESSWorkModeSelect(_EnumRegisterSelect):
 
 
 class FoxESSPhaseSelect(_EnumRegisterSelect):
-    """Phases to charge on; only meaningful with the phase-switch box.
+    """Phases to charge on; only does anything with a phase-switch box.
 
     Shows the phase sequence from the status block and writes the
-    phase-switching command register.
+    phase-switching command register. Unavailable unless the user has said
+    a box is fitted (the `phase_box_fitted` option, read live from the
+    entry); the charger gives no reliable sign of the box itself.
     """
 
     _attr_icon = "mdi:electric-switch"
@@ -114,3 +117,16 @@ class FoxESSPhaseSelect(_EnumRegisterSelect):
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "phase_sequence", "Phase Sequence")
+        self._entry = entry
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self._entry.options.get(CONF_PHASE_BOX_FITTED, False))
+
+    async def async_select_option(self, option: str) -> None:
+        if not self._entry.options.get(CONF_PHASE_BOX_FITTED, False):
+            raise HomeAssistantError(
+                "FoxESS: the phase selector only works with a FoxESS phase-switch box. "
+                "Turn on 'Phase-switch box fitted' in the integration options if you have one."
+            )
+        await super().async_select_option(option)

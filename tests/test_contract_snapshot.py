@@ -180,6 +180,7 @@ SAMPLES: dict[str, dict] = {
 
 class _Entry:
     entry_id = "valuesentry"
+    options = {"phase_box_fitted": True}  # the phase select is off without it
 
 
 class _Coordinator:

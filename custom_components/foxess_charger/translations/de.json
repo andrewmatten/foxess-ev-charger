@@ -25,7 +25,11 @@
       "init": {
         "title": "Charger-Optionen",
         "data": {
-          "scan_interval": "Aktualisierungsintervall in Sekunden"
+          "scan_interval": "Aktualisierungsintervall in Sekunden",
+          "phase_box_fitted": "Phasenumschaltbox verbaut"
+        },
+        "data_description": {
+          "phase_box_fitted": "Nur einschalten, wenn eine FoxESS-Phasenumschaltbox installiert ist. Ohne Box bewirkt die manuelle Phasenauswahl nichts."
         }
       }
     },

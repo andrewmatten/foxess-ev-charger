@@ -16,6 +16,7 @@ from homeassistant.core import callback
 
 from .const import (
     CONF_HOST,
+    CONF_PHASE_BOX_FITTED,
     CONF_PORT,
     CONF_SLAVE_ID,
     DEFAULT_PORT,
@@ -94,7 +95,7 @@ class FoxESSChargerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class FoxESSChargerOptionsFlow(OptionsFlow):
-    """Poll interval."""
+    """Poll interval and whether a phase-switch box is fitted."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._entry = config_entry
@@ -116,10 +117,17 @@ class FoxESSChargerOptionsFlow(OptionsFlow):
             elif interval > MAX_SCAN_INTERVAL:
                 errors["base"] = "scan_interval_too_high"
             else:
-                return self.async_create_entry(title="", data={CONF_SCAN_INTERVAL: interval})
+                return self.async_create_entry(title="", data={
+                    CONF_SCAN_INTERVAL: interval,
+                    CONF_PHASE_BOX_FITTED: user_input.get(CONF_PHASE_BOX_FITTED, False),
+                })
         current = self._entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        box = self._entry.options.get(CONF_PHASE_BOX_FITTED, False)
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({vol.Required(CONF_SCAN_INTERVAL, default=current): int}),
+            data_schema=vol.Schema({
+                vol.Required(CONF_SCAN_INTERVAL, default=current): int,
+                vol.Optional(CONF_PHASE_BOX_FITTED, default=box): bool,
+            }),
             errors=errors,
         )

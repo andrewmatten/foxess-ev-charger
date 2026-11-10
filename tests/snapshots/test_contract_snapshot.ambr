@@ -306,6 +306,7 @@
         'entry_id': <ANY>,
         'minor_version': 1,
         'options': dict({
+          'phase_box_fitted': False,
           'scan_interval': 10,
         }),
         'pref_disable_new_entities': False,
@@ -383,6 +384,7 @@
         'context': dict({
         }),
         'data': dict({
+          'phase_box_fitted': False,
           'scan_interval': 10,
         }),
         'description': None,
@@ -396,6 +398,7 @@
         'context': dict({
         }),
         'data': dict({
+          'phase_box_fitted': False,
           'scan_interval': 300,
         }),
         'description': None,
@@ -412,6 +415,13 @@
             'name': 'scan_interval',
             'required': True,
             'type': 'integer',
+          }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
           }),
         ]),
         'description_placeholders': None,
@@ -433,6 +443,13 @@
             'required': True,
             'type': 'integer',
           }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
+          }),
         ]),
         'description_placeholders': None,
         'errors': dict({
@@ -449,6 +466,7 @@
         'context': dict({
         }),
         'data': dict({
+          'phase_box_fitted': False,
           'scan_interval': 5,
         }),
         'description': None,
@@ -465,6 +483,13 @@
             'name': 'scan_interval',
             'required': True,
             'type': 'integer',
+          }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
           }),
         ]),
         'description_placeholders': None,
@@ -485,6 +510,13 @@
             'required': True,
             'type': 'integer',
           }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
+          }),
         ]),
         'description_placeholders': None,
         'errors': dict({
@@ -503,6 +535,13 @@
             'name': 'scan_interval',
             'required': True,
             'type': 'integer',
+          }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
           }),
         ]),
         'description_placeholders': None,
@@ -523,6 +562,13 @@
             'required': True,
             'type': 'integer',
           }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
+          }),
         ]),
         'description_placeholders': None,
         'errors': dict({
@@ -541,6 +587,13 @@
             'name': 'scan_interval',
             'required': True,
             'type': 'integer',
+          }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
           }),
         ]),
         'description_placeholders': None,
@@ -561,6 +614,13 @@
             'required': True,
             'type': 'integer',
           }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
+          }),
         ]),
         'description_placeholders': None,
         'errors': dict({
@@ -580,6 +640,13 @@
             'required': True,
             'type': 'integer',
           }),
+          dict({
+            'default': False,
+            'name': 'phase_box_fitted',
+            'optional': True,
+            'required': False,
+            'type': 'boolean',
+          }),
         ]),
         'description_placeholders': None,
         'errors': dict({
@@ -592,6 +659,7 @@
         'type': <FlowResultType.FORM: 'form'>,
       }),
       'stored': dict({
+        'phase_box_fitted': False,
         'scan_interval': 10,
       }),
     }),
@@ -5307,7 +5375,7 @@
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
-    'state': 'three_phase',
+    'state': 'unavailable',
   })
 # ---
 # name: test_registry_and_state_contract[de][select.contractentry01_work_mode-entry]
@@ -8207,7 +8275,7 @@
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
-    'state': 'three_phase',
+    'state': 'unavailable',
   })
 # ---
 # name: test_registry_and_state_contract[en][select.contractentry01_work_mode-entry]
@@ -15515,7 +15583,9 @@
         'issues.wrong_work_mode.title',
         'options.error.scan_interval_too_high',
         'options.error.scan_interval_too_low',
+        'options.step.init.data.phase_box_fitted',
         'options.step.init.data.scan_interval',
+        'options.step.init.data_description.phase_box_fitted',
         'options.step.init.title',
       ]),
     }),
@@ -15740,7 +15810,9 @@
         'issues.wrong_work_mode.title',
         'options.error.scan_interval_too_high',
         'options.error.scan_interval_too_low',
+        'options.step.init.data.phase_box_fitted',
         'options.step.init.data.scan_interval',
+        'options.step.init.data_description.phase_box_fitted',
         'options.step.init.title',
       ]),
     }),

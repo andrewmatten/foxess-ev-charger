@@ -237,7 +237,8 @@ async def test_disabled_by_default_controls_route_to_set_register(hass, setup):
 
     fake = FakeController()
     fake.phase_box = {"auto_phase_switch": 0, "min_switch_interval": 5}
-    await setup(fake)
+    h = await setup(fake)
+    hass.config_entries.async_update_entry(h.entry, options={**h.entry.options, "phase_box_fitted": True})
     registry = er.async_get(hass)
     for entity_id in (f"switch.{E}_auto_phase_switch", f"select.{E}_phase_sequence"):
         registry.async_update_entity(entity_id, disabled_by=None)

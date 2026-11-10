@@ -40,6 +40,7 @@ CONF_SLAVE_ID = "slave_id"
 DEFAULT_PORT = 502            # standard Modbus TCP port; the charger listens here
 DEFAULT_SLAVE_ID = 1          # Modbus unit ID
 DEFAULT_SCAN_INTERVAL = 10    # seconds between polls; the options flow allows 5-300
+CONF_PHASE_BOX_FITTED = "phase_box_fitted"  # option: a FoxESS phase-switch box is installed
 
 # ── Register map ─────────────────────────────────────────────────────────────
 # Each address is one 16-bit register. The note beside it gives the raw unit
