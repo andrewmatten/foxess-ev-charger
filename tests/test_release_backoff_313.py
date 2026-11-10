@@ -275,3 +275,26 @@ async def test_saved_state_keeps_comms_latch_for_a_rollback(latch):
 async def test_comms_latch_false_when_not_latched():
     c, io = await make()
     assert c.export_state()["comms_latch"] is False
+
+
+# ── diagnostics: why am I not charging ───────────────────────────────────
+async def test_diagnostics_show_seconds_until_auto_release():
+    c, io = await comms_latched()
+    d = c.diagnostics
+    assert d["latch_cause"] == "comms" and d["latch_release_in"] is None   # timer not running
+    await refresh(c, io, 1)                        # timer starts
+    assert c.diagnostics["latch_release_in"] == COMMS_LATCH_RELEASE_S
+    await refresh(c, io, 30)
+    assert c.diagnostics["latch_release_in"] == COMMS_LATCH_RELEASE_S - 30
+    await measure_hold(c, io)
+    assert c.diagnostics["latch_release_in"] is None                     # not latched
+    await drop_link_during_enable(c, io)
+    await refresh(c, io, 1)
+    assert c.diagnostics["latch_release_in"] == 2 * COMMS_LATCH_RELEASE_S  # backed off
+    io.regs[FAULT_LO] = 1                          # emergency stop: hard
+    await c.async_poll()
+    await drain(c)
+    io.regs[FAULT_LO] = 0
+    await refresh(c, io, 30)
+    await refresh(c, io, 30)
+    assert c.diagnostics["latch_cause"] == "hard" and c.diagnostics["latch_release_in"] is None
