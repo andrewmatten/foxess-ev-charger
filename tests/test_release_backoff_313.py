@@ -242,3 +242,13 @@ async def test_huge_release_history_stays_bounded():
 
 async def test_state_saved_by_3_1_2_loads_with_no_history():
     assert_holds([await restarted_hold(saved(enabled=False))], [FAULT_RELEASE_S])
+
+
+# ── saved latch cause: corrupt values and rollback to 3.1.1/3.1.2 ─────────
+@pytest.mark.parametrize("bad", [["comms"], {"cause": "comms"}, 1, True])
+@pytest.mark.parametrize("comms_latch, expected", [(True, "comms"), (False, "hard")])
+async def test_corrupt_saved_latch_cause_loads_as_unclassified(bad, comms_latch, expected):
+    c, io = await make(saved(enabled=False, safety_latched=True, latch_cause=bad,
+                             comms_latch=comms_latch))
+    assert c.phase == "faulted" and c.latch_cause == expected
+
