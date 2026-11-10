@@ -8,6 +8,8 @@ hard latch needs a human.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from custom_components.foxess_charger.controller import (
@@ -176,3 +178,67 @@ async def test_hard_latch_never_releases_after_a_streak():
         assert c.phase == "faulted" and c.needs_human
         io.clock.now += 86400
     assert positive_writes(io) == []
+
+
+# ── release history survives a restart (S4) ──────────────────────────────
+async def restarted_hold(state, **kw):
+    """Hold of a soft fault on a controller restored from ``state``."""
+    c, io = await make(state, charging=False, **kw)
+    await soft_fault(c, io)
+    return await measure_hold(c, io)
+
+
+async def released_state():
+    """The state saved by the write that released a first soft-fault latch."""
+    states = []
+
+    async def persist(state):
+        states.append(dict(state))
+
+    c, io = await make(saved(enabled=False), charging=False, persist=persist)
+    await soft_fault(c, io)
+    await measure_hold(c, io)
+    assert not states[-1]["safety_latched"]
+    return states[-1]
+
+
+async def test_release_history_survives_a_restart():
+    assert_holds([await restarted_hold(await released_state())], [2 * FAULT_RELEASE_S])
+
+
+@pytest.mark.parametrize("down, expected", [(3600, 2 * FAULT_RELEASE_S),
+                                            (CEILING, FAULT_RELEASE_S)])
+async def test_release_history_ages_by_wall_clock_across_a_restart(down, expected):
+    state = await released_state()
+    later = time.time() + down
+    assert_holds([await restarted_hold(state, wall_clock=lambda: later)], [expected])
+
+
+@pytest.mark.parametrize("bad", [
+    "x", 5, None, {"t": 1.0}, [None], ["1"], [True], [float("nan")], [float("inf")],
+    [[1.0]], [{"t": 1.0}],
+])
+async def test_malformed_release_history_is_ignored(bad):
+    hold = await restarted_hold(saved(enabled=False, latch_releases=bad))
+    assert_holds([hold], [FAULT_RELEASE_S])
+    if isinstance(bad, list):                      # good entries beside bad ones still count
+        state = saved(enabled=False, latch_releases=[*bad, time.time() - 100])
+        assert_holds([await restarted_hold(state)], [2 * FAULT_RELEASE_S])
+
+
+async def test_stale_and_future_releases_are_dropped():
+    now = time.time()
+    stale_and_future = [now - CEILING, now - 86400, now + 600, now + 86400]
+    hold = await restarted_hold(saved(enabled=False, latch_releases=stale_and_future))
+    assert_holds([hold], [FAULT_RELEASE_S])
+    state = saved(enabled=False, latch_releases=[*stale_and_future, now - 60])
+    assert_holds([await restarted_hold(state)], [2 * FAULT_RELEASE_S])
+
+
+async def test_huge_release_history_stays_bounded():
+    state = saved(enabled=False, latch_releases=[time.time() - 1] * 100_000)
+    assert_holds([await restarted_hold(state)], [CEILING])
+
+
+async def test_state_saved_by_3_1_2_loads_with_no_history():
+    assert_holds([await restarted_hold(saved(enabled=False))], [FAULT_RELEASE_S])
