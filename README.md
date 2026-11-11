@@ -8,7 +8,7 @@ A [Home Assistant](https://www.home-assistant.io/) custom integration for **FoxE
 
 Currently developed and tested against the **FoxESS A7300P1-E-B-WO** (7.3 kW, single-phase, 32 A max, 230 V).
 
-> **Three-phase models (11 kW / 22 kW).** Start, stop and current changes (6-32 A) were confirmed by a user on a 22 kW A022KP1 (issue #4, release 3.1.2); 11 kW models and all phase switching remain untested. The integration exposes the three-phase registers, but the phase-related entities are **disabled by default**. The manual phase selector only does anything if a separate FoxESS phase-switch box is fitted, so it also stays unavailable until you turn on *Phase-switch box fitted* in the integration options. Automatic phase switching is the charger's own function and does not need the box. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything here is untested.
+> **Three-phase models (11 kW / 22 kW).** Start, stop and current changes (6-32 A) were confirmed by a user on a 22 kW A022KP1 (issue #4, release 3.1.2); 11 kW models and all phase switching remain untested. The integration exposes the three-phase registers, but the phase-related entities are **disabled by default**. The manual phase selector only does anything if a separate FoxESS phase-switch box is fitted, so it also stays unavailable until you turn on *Phase-switch box fitted* in the integration options. Automatic phase switching is the charger's own function and does not need the box. As of 2.2.0, Max Charging Current/Power's allowed range is derived from the charger's own detected model (register `0x101E`) via a small capability table that includes best-effort entries for the three-phase A011 (11 kW / 16 A) and A022 (22 kW / 32 A) models - inferred from this fork's own lineage and the model-number naming convention, not confirmed against real three-phase hardware. If the detected model string doesn't match, the single-phase A7300 defaults (7.3 kW / 32 A) are used. If you have a three-phase model, you can enable the relevant entities manually in the entity settings, but everything else here is untested.
 
 Entities disabled by default (three-phase models; the phase selector and phase sequence sensor also need a phase-switch box):
 
@@ -82,7 +82,7 @@ Each release in a row doubles the wait, up to 2 hours. A release always leaves c
 
 **What to do**
 
-- `comms`, `fault`, `stop_failed`: nothing. It releases by itself, and your automation or you can turn charging on again.
+- `comms`, `fault`, `stop_failed`: nothing. It releases by itself, and your automation or you can turn charging on again. If your own automation turns the switch on whenever it is off, make it wait until `latch_cause` is empty.
 - `hard` (`needs_human: true`, Repairs notice): check the charger and clear the fault, then turn the charging switch on yourself from the dashboard or app. An automation cannot do it.
 
 ## Known limitations
