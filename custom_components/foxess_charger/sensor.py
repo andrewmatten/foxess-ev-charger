@@ -192,7 +192,9 @@ STATUS_REASONS = (
 def _status_reason(data: Observation) -> str:
     status = valid_status(data)
     cause, phase = data.get("latch_cause"), data.get("control_phase")
-    if status is None or data.get("status_block_ok") is False:
+    # status_block_ok is absent when the poll returned nothing, so anything but
+    # True means this poll got no fresh status (stale carried-over fields).
+    if status is None or data.get("status_block_ok") is not True:
         return "charger_offline"
     if data.get("needs_human"):
         return "needs_attention"
@@ -475,6 +477,13 @@ class FoxESSChargerSensor(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Senso
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = build_device_info(entry, coordinator)
         self._block = description.block
+
+    @property
+    def available(self) -> bool:
+        # The status reason must stay visible while the charger is offline.
+        if self.entity_description.key == "charging_status_reason":
+            return self.coordinator.data is not None
+        return super().available
 
     @property
     def native_value(self) -> StateType:

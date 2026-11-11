@@ -11047,7 +11047,7 @@
       }),
     }),
     'charging_status_reason': dict({
-      'available_when_coordinator_failed': False,
+      'available_when_coordinator_failed': True,
       'available_when_stale': dict({
         'config': True,
         'phase_box': True,

@@ -177,6 +177,11 @@ SAMPLES: dict[str, dict] = {
     },
 }
 
+# The real protocol flags every successful status read; only "empty" is a failed poll.
+for _name, _sample in SAMPLES.items():
+    if _sample:
+        _sample["status_block_ok"] = True
+
 
 class _Entry:
     entry_id = "valuesentry"
