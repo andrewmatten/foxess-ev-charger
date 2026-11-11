@@ -219,15 +219,19 @@ def _parse_saved(saved: Any) -> Intent | None:
     return Intent(flags[0], power, current, rev, flags[1], flags[2], cause)
 
 
-def _parse_releases(saved: dict, wall: float, now: float) -> list[float]:
+def _parse_releases(saved: dict, wall: float, now: float, latched: bool = False) -> list[float]:
     """Saved release epochs as ``now``-clock times, oldest first. Only finite
     numbers from the last RELEASE_HOLD_MAX_S and at most a minute ahead (a
-    wrong clock) count; anything malformed is dropped, never raises."""
+    wrong clock) count; anything malformed is dropped, never raises. A
+    restored latch continues the streak these belong to, so then every finite
+    one counts whatever its age, a future one as now."""
     raw = saved.get("latch_releases")
     if not isinstance(raw, list):
         return []
     ages = [wall - t for t in raw if isinstance(t, (int, float))
             and not isinstance(t, bool) and math.isfinite(t)]
+    if latched:
+        return [now - max(a, 0.0) for a in sorted(ages, reverse=True)][-6:]
     return [now - a for a in sorted(ages, reverse=True) if -60 <= a < RELEASE_HOLD_MAX_S][-6:]
 
 
@@ -1201,7 +1205,8 @@ class ChargingController:
             self._intent = Intent(enabled=active)
         else:
             if isinstance(saved, dict):
-                self._releases = _parse_releases(saved, self._wall(), self._clock())
+                self._releases = _parse_releases(
+                    saved, self._wall(), self._clock(), saved.get("safety_latched") is True)
             parsed = _parse_saved(saved)
             if parsed is None:
                 _LOGGER.warning("Saved charging intent is malformed; starting paused")
