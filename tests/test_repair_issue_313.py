@@ -1,6 +1,7 @@
 """A person is needed (hard latch): Home Assistant shows a Repairs issue."""
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 from homeassistant.helpers import issue_registry as ir
@@ -77,5 +78,29 @@ async def test_registry_failure_does_not_break_polling(hass, enable_custom_integ
         with patch.object(coordinator_module.ir, "async_create_issue", side_effect=RuntimeError):
             await coordinator.async_refresh()
         assert coordinator.last_update_success is True
+    finally:
+        await h.async_unload()
+
+
+async def test_registry_failure_logs_once_then_recovery_once(hass, enable_custom_integrations, caplog):
+    fake = FakeController(status=1)
+    h = Harness(hass, make_entry(ENTRY), fake)
+    assert await h.async_setup()
+    try:
+        coordinator = hass.data[DOMAIN][ENTRY]["coordinator"]
+        caplog.set_level(logging.DEBUG)
+        caplog.clear()
+        fake.needs_human = True
+        with patch.object(coordinator_module.ir, "async_create_issue", side_effect=RuntimeError):
+            for _ in range(5):
+                await coordinator.async_refresh()
+        failed = [r for r in caplog.records if r.levelno >= logging.WARNING and "repair" in r.getMessage()]
+        assert len(failed) == 1
+        caplog.clear()
+        for _ in range(3):
+            await coordinator.async_refresh()
+        back = [r for r in caplog.records if "repair issue works again" in r.getMessage()]
+        assert len(back) == 1
+        assert issue(hass) is not None
     finally:
         await h.async_unload()
