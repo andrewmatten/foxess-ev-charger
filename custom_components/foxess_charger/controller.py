@@ -481,11 +481,14 @@ class ChargingController:
             await asyncio.wait_for(
                 self._persist(self.export_state()), self._persist_timeout)
         except Exception as err:  # noqa: BLE001 - never block protective writes
+            if self._persist_error is None:   # log the first failure, not every retry
+                _LOGGER.exception("Could not persist charging intent")
             self._persist_pending = True
             self._persist_error = f"intent revision {self._intent.revision} not saved: {err}"
             self._counters["persist_failures"] += 1
-            _LOGGER.exception("Could not persist charging intent")
             return False
+        if self._persist_error is not None:
+            _LOGGER.info("FoxESS charging intent saving works again")
         self._persist_pending, self._persist_error = False, None
         return True
 
