@@ -58,3 +58,33 @@ async def test_store_failure_logs_once_then_recovery_once(hass, caplog):
     coordinator.energy.dirty = True
     await coordinator._async_persist()
     assert len([r for r in lines(caplog, logging.INFO) if "saving works again" in r.getMessage()]) == 1
+
+
+async def test_intent_save_failure_logs_once_then_recovery_once(caplog):
+    from test_comms_latch_release import refresh
+    from test_controller import make, saved
+
+    name = "custom_components.foxess_charger.controller"
+    broken = [True]
+
+    async def persist(_state):
+        if broken[0]:
+            raise OSError("disk full")
+
+    c, io = await make(saved(enabled=False), charging=False)
+    c._persist = persist
+    caplog.set_level(logging.DEBUG, logger=name)
+    caplog.clear()
+    await c._update(enabled=False)
+    for _ in range(10):
+        await refresh(c, io, 20)
+    saves = [r for r in caplog.records if r.name == name and "persist" in r.getMessage()]
+    assert [r.levelno for r in saves] == [logging.ERROR]
+    assert c.diagnostics["persist_pending"] and c.diagnostics["persist_failures"] == 11
+    caplog.clear()
+    broken[0] = False
+    await refresh(c, io, 20)
+    await refresh(c, io, 20)
+    back = [r for r in caplog.records if r.name == name and "sav" in r.getMessage()]
+    assert [r.levelno for r in back] == [logging.INFO]
+    assert not c.diagnostics["persist_pending"]
