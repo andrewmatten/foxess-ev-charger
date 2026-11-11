@@ -235,6 +235,28 @@ async def test_stale_and_future_releases_are_dropped():
     assert_holds([await restarted_hold(state)], [2 * FAULT_RELEASE_S])
 
 
+@pytest.mark.parametrize("wall_step", [0.0, -3 * 3600.0, 3 * 3600.0])
+async def test_restart_mid_hold_keeps_the_backoff_level(wall_step):
+    """A latch restored by a restart keeps the releases of the streak it
+    continues, even those 2 h old or more and with the wall clock stepped."""
+    ref = {}                                       # wall clock follows the fake clock
+    c, io = await make(saved(enabled=False), charging=False,
+                       wall_clock=lambda: 1e9 + (ref["io"].clock.now if ref else 1000))
+    ref["io"] = io
+    for _ in range(4):
+        await soft_fault(c, io)
+        await measure_hold(c, io, step=30)
+    io.clock.now += 7000                           # quiet, but < 2 h: streak continues
+    await soft_fault(c, io)
+    before = c._release_hold("fault")
+    assert before == CEILING
+    io.clock.now += 400                            # HA restarts 400 s into the hold
+    state, clock = c.export_state(), io.clock
+    c2, _ = await make(state, charging=False, wall_clock=lambda: 1e9 + clock.now + wall_step)
+    assert c2.latch_cause == "fault"
+    assert c2._release_hold("fault") == before
+
+
 async def test_huge_release_history_stays_bounded():
     state = saved(enabled=False, latch_releases=[time.time() - 1] * 100_000)
     assert_holds([await restarted_hold(state)], [CEILING])
