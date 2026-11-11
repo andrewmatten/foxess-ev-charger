@@ -99,7 +99,7 @@ async def test_registry_failure_logs_once_then_recovery_once(hass, enable_custom
         caplog.clear()
         for _ in range(3):
             await coordinator.async_refresh()
-        back = [r for r in caplog.records if "repair issue works again" in r.getMessage()]
+        back = [r for r in caplog.records if "repair issue updating works again" in r.getMessage()]
         assert len(back) == 1
         assert issue(hass) is not None
     finally:

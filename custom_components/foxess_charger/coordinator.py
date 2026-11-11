@@ -250,9 +250,15 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
                 )
             else:
                 ir.async_delete_issue(self.hass, DOMAIN, self._needs_human_issue_id)
-        except Exception:  # noqa: BLE001 - a repair notice must not break polling
-            _LOGGER.exception("Could not update the FoxESS repair issue")
+        except Exception as err:  # noqa: BLE001 - a repair notice must not break polling
+            # Log the first failure (with traceback); stay quiet while it keeps failing.
+            if "repair" not in self._persist_failing:
+                self._persist_failing.add("repair")
+                _LOGGER.exception("Could not update the FoxESS repair issue: %s", err)
             return
+        if "repair" in self._persist_failing:
+            self._persist_failing.discard("repair")
+            _LOGGER.info("FoxESS repair issue updating works again")
         self._needs_human_issue = needed
 
     def async_clear_needs_human_issue(self) -> None:
