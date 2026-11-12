@@ -514,10 +514,26 @@ async def test_non_allowlisted_registers_never_reach_the_wire(address):
 
 async def test_register_write_confirmed_by_readback():
     c, io = await make()
-    assert (await c.async_set_register(0x3000, 1)).outcome == "confirmed"
+    assert (await c.async_set_register(0x3004, 20)).outcome == "confirmed"
     io.ignore.add(0x3003)
     with pytest.raises(ControlError):
         await c.async_set_register(0x3003, 120)
+
+
+async def test_work_mode_change_is_refused_while_a_car_is_connected():
+    # Protocol V1.06, 2.36: the register only takes effect when unplugged.
+    c, io = await make()
+    with pytest.raises(ControlError, match="no car is connected"):
+        await c.async_set_register(0x3000, 1)
+    assert not [w for w in io.writes if w[1] == 0x3000]
+    assert io.regs[0x3000] == 0
+
+
+async def test_work_mode_change_is_confirmed_when_unplugged():
+    c, io = await make(saved(enabled=False), charging=False)
+    io.regs[CC] = 0
+    assert (await c.async_set_register(0x3000, 1)).outcome == "confirmed"
+    assert io.regs[0x3000] == 1
 
 
 async def test_lock_confirmed_by_lock_status():

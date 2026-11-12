@@ -7,6 +7,11 @@
 - Plug&Charge behaviour is unchanged, including adopting a self-started session after a replug. Start is never sent in Plug&Charge.
 - The Repairs warning and the specific enable error now apply to Locked mode only. A start that times out in Controlled mode reports "no active charging session after enable".
 - Diagnostics: new `start_commands` counter.
+- Follows three rules from the FoxESS protocol document (V1.06) that the code did not:
+  - **Both limits on enable (2.37/2.38).** The document starts a session once the current limit and the power limit have both been set non-zero. An enable with no saved current limit now also writes 0x3001, using the charger's own maximum (0x1013). That value is what the register holds by default, so it adds no cap; it is not saved, not refreshed, and a charger that refuses it does not fail the enable.
+  - **Message spacing (1.4).** Requests to the charger are now sent at least 500 ms apart. The wait is not counted against a request's own timeout. Polls and commands take correspondingly longer.
+  - **Work Mode only changes when unplugged (2.36).** A Work Mode change is refused with a clear error while a car is connected, instead of being written and left in doubt.
+- An enable that sees no session now says what the charger last reported (work mode, status, control pilot, cable, power, stop reason) and whether Start was sent or refused, in the error and as a warning in the log.
 
 ## 3.1.2 - 2026-11-05
 

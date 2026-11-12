@@ -33,6 +33,9 @@ from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable
 
 from .const import (
+    CP_STATUS_MAP,
+    STATUS_MAP,
+    STOP_REASON_MAP,
     REG_ALLOWED_CHARGE_ENERGY,
     REG_ALLOWED_CHARGE_TIME,
     REG_CHARGING_CONTROL,
@@ -46,6 +49,7 @@ from .const import (
     REG_PHASE_SWITCHING,
     REG_MAX_CHARGING_CURRENT,
     REG_MAX_CHARGING_POWER,
+    REG_MAX_CURRENT,
     REG_MAX_POWER,
     REG_STATUS_BLOCK_START,
     REG_TIME_VALIDITY,
@@ -161,6 +165,8 @@ class _Evidence:
     lock_status: int | None
     at: float
     fault_code: int | None = None       # None = not read
+    cp_status: int | None = None        # reporting only (see _start_failure)
+    stop_reason: int | None = None      # reporting only
 
     @property
     def valid(self) -> bool:
@@ -257,6 +263,10 @@ class ChargingController:
         self._released = False
         self._unplug_first: float | None = None
         self._max_power: int | None = None       # device capability (0x1011)
+        self._max_current: int | None = None     # device capability (0x1013)
+        # Current limit written for the last enable when none was saved:
+        # (raw value, confirmed by read-back). Reporting only.
+        self._enable_current: tuple[int, bool] | None = None
         self._work_mode: int | None = None       # last decoded 0x3000, kept across failed reads
         self._mismatch_since: float | None = None
         self._mismatch_count = 0
@@ -471,7 +481,10 @@ class ChargingController:
         if regs is None:
             return _Evidence(None, None, None, None, self._clock())
         code = regs[FAULT_OFFSET] << 16 | regs[FAULT_OFFSET + 1]
-        return _Evidence(regs[3], regs[5], regs[14], regs[15], self._clock(), code)
+        return _Evidence(
+            regs[3], regs[5], regs[14], regs[15], self._clock(), code,
+            cp_status=regs[4], stop_reason=regs[2],
+        )
 
     async def _send(self, address: int, value: int, wire: tuple | None) -> None:
         """Dispatch one write; the latest-intent check is the last step before I/O."""
@@ -750,6 +763,9 @@ class ChargingController:
             except ControlError:
                 await self._revoke()
                 raise
+        self._enable_current = None
+        if power and current is None:
+            await self._write_rated_current(wire)
         try:
             # Each register gets its own fresh confirmation_timeout window
             # rather than splitting one between them - a slow transaction on
@@ -793,6 +809,34 @@ class ChargingController:
         self._counters["confirmations"] += 1
         return CommandResult("confirmed", intent.revision, power)
 
+    async def _write_rated_current(self, wire) -> None:
+        """An enable with no saved current limit still writes 0x3001.
+
+        The protocol document (V1.06, 2.37/2.38) starts a session from the
+        connect or finish state once the current limit and the power limit
+        have both been set non-zero, so a power write alone may not start
+        one. The value written is the charger's own maximum (0x1013), which
+        is what 0x3001 holds by default and reverts to anyway: it adds no
+        cap and raises nothing. It is not saved as intent and not refreshed.
+        Best effort: one attempt, and a failure only shows in the enable's
+        own outcome, because no limit the user asked for depends on it."""
+        if self._max_current is None:
+            regs = await self._read(REG_MAX_CURRENT)
+            if regs is not None and MIN_CURRENT_RAW <= regs[0] <= MAX_CURRENT_RAW:
+                self._max_current = regs[0]
+        if self._max_current is None:
+            _LOGGER.warning(
+                "FoxESS maximum current (0x1013) unreadable; enabling with the "
+                "power limit only")
+            return
+        confirmed = await self._write_once(
+            REG_MAX_CHARGING_CURRENT, self._max_current, wire)
+        self._enable_current = (self._max_current, confirmed)
+        if not confirmed:
+            _LOGGER.warning(
+                "FoxESS current limit %.1f A not confirmed by read-back; "
+                "continuing with the power limit", self._max_current / 10)
+
     async def _preflight(self, wire, deadline) -> None:
         """Before any positive write: a fresh valid, fault-free frame. An
         unplugged cable passes (the enable is then staged); a refusing status,
@@ -828,6 +872,8 @@ class ChargingController:
         already opening); only the status decides."""
         controlled = await self._controlled_mode()
         next_start = self._clock()
+        starts = refused = 0
+        refusal_code: int | None = None
         while True:
             self._check(wire)
             ev = await self._observe()
@@ -846,12 +892,55 @@ class ChargingController:
             ):
                 next_start = self._clock() + START_RETRY_S
                 self._counters["start_commands"] += 1
+                before = self._counters["refusals"]
                 await self._send(REG_CHARGING_CONTROL, START_COMMAND, wire)
+                starts += 1
+                if self._counters["refusals"] > before:
+                    refused += 1
+                    if self._last_refusal and self._last_refusal[0] == REG_CHARGING_CONTROL:
+                        refusal_code = self._last_refusal[1]
                 continue    # look again right away: Start usually shows at once
             if self._clock() >= deadline:
-                raise ControlError(WORK_MODE_ERRORS.get(
-                    self._work_mode, "no active charging session after enable"))
+                raise ControlError(
+                    self._start_failure(ev, wire, starts, refused, refusal_code))
             await self._sleep(POLL_STEP_S)
+
+    def _start_failure(self, ev: _Evidence, wire: tuple, starts: int, refused: int,
+                       refusal_code: int | None) -> str:
+        """Why an enable saw no session, with what the charger last reported
+        so the message can be acted on without a diagnostics download."""
+        def named(value, names) -> str:
+            return f"{value} ({names[value]})" if value in names else f"{value}"
+
+        reason = WORK_MODE_ERRORS.get(
+            self._work_mode, "no active charging session after enable")
+        if self._work_mode == CONTROLLED_MODE:
+            start = f"Start sent {starts}x, {refused} refused"
+            if refused:
+                start += f" (Modbus exception {refusal_code})"
+        else:
+            start = "Start not sent (only sent in Controlled mode)"
+        power = f"{ev.power_raw / 10:.1f} kW" if _is_int(ev.power_raw) else f"{ev.power_raw}"
+        limit_power, limit_current = wire
+        limits = f"{limit_power / 10:.1f} kW" if _is_int(limit_power) else "no power limit"
+        if _is_int(limit_current):
+            limits += f", {limit_current / 10:.1f} A"
+        elif self._enable_current is not None:
+            value, confirmed = self._enable_current
+            limits += f", {value / 10:.1f} A (charger maximum, none saved"
+            limits += ")" if confirmed else "; not confirmed)"
+        else:
+            limits += ", no current limit"
+        detail = (
+            f"limits written {limits}; "
+            f"work mode {named(self._work_mode, WORK_MODE_MAP)}, "
+            f"status {named(ev.status, STATUS_MAP)}, "
+            f"pilot {named(ev.cp_status, CP_STATUS_MAP)}, "
+            f"cable {ev.cc_status}, power {power}, "
+            f"stop reason {named(ev.stop_reason, STOP_REASON_MAP)}; {start}"
+        )
+        _LOGGER.warning("FoxESS enable saw no session: %s", detail)
+        return f"{reason} [{detail}]"
 
     async def _stop_sequence(self) -> None:
         """Zero power did not stop charging: 0x4001 Stop, confirmed, then latch."""
@@ -1290,6 +1379,15 @@ class ChargingController:
 
     async def _op_register(self, address: int, value: int) -> CommandResult:
         async with self._lock:
+            if address == REG_WORK_MODE:
+                # Protocol document V1.06, 2.36: the register only takes
+                # effect while no car is connected. Writing it with a car
+                # plugged in leaves the mode in doubt, so it is refused.
+                ev = await self._read_status()
+                if ev.cc_status == 1:
+                    raise ControlError(
+                        "Work Mode can only be changed while no car is connected; "
+                        "unplug the car and try again")
             deadline = self._clock() + self._timeout
             proof = WRITE_ONLY_CONFIRMATION.get(address)
             if proof is None:

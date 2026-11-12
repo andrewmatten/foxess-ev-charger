@@ -41,7 +41,7 @@ async def failed_enable(work_mode, *, poll=True):
 
 
 async def test_controlled_mode_keeps_generic_message():
-    assert await failed_enable(0) == GENERIC
+    assert (await failed_enable(0)).startswith(GENERIC)
 
 
 async def test_locked_mode_gets_its_own_message():
@@ -51,12 +51,12 @@ async def test_locked_mode_gets_its_own_message():
 
 
 async def test_plug_and_charge_keeps_generic_message():
-    assert await failed_enable(1) == GENERIC
+    assert (await failed_enable(1)).startswith(GENERIC)
 
 
 async def test_unknown_work_mode_keeps_generic_message():
-    assert await failed_enable(0, poll=False) == GENERIC
-    assert await failed_enable(7) == GENERIC
+    assert (await failed_enable(0, poll=False)).startswith(GENERIC)
+    assert (await failed_enable(7)).startswith(GENERIC)
 
 
 async def test_failed_config_read_keeps_last_known_mode():

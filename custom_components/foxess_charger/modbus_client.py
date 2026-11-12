@@ -50,6 +50,12 @@ MAX_READ_COUNT = 125
 
 DEFAULT_TRANSACTION_TIMEOUT = 5.0
 
+# The FoxESS protocol document (V1.06, section 1.4) asks for messages to be
+# sent 500 ms apart. The client's own default is 0 (no pacing) so its framing
+# tests run at full speed; the integration passes this value when it builds
+# the client for a real charger.
+PROTOCOL_MESSAGE_INTERVAL = 0.5
+
 
 class ModbusError(Exception):
     """Base class for strict-API failures."""
@@ -131,11 +137,17 @@ class FoxESSModbusClient:
     def __init__(
         self, host: str, port: int, slave_id: int,
         timeout: float = DEFAULT_TRANSACTION_TIMEOUT,
+        min_interval: float = 0.0,
     ) -> None:
+        if min_interval < 0:
+            raise ValueError("min_interval must not be negative")
         self._host      = host
         self._port      = port
         self._slave_id  = slave_id
         self._timeout   = timeout
+        # Minimum time between the sends of two consecutive requests.
+        self._min_interval = min_interval
+        self._last_send: float | None = None
         self._tid       = 0
         self._sock: socket.socket | None = None
         self._lock       = threading.Lock()
@@ -260,6 +272,12 @@ class FoxESSModbusClient:
         stream stays aligned) and reading continues, within the same
         deadline, for a reply that actually matches.
         """
+        # Pace requests before the deadline starts, so waiting out the
+        # interval never eats into the transaction's own time budget.
+        if self._min_interval and self._last_send is not None:
+            wait = self._last_send + self._min_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
         deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
         request = self._frame(pdu)
         sent_tid = int.from_bytes(request[:2], "big")
@@ -273,6 +291,7 @@ class FoxESSModbusClient:
             sock.settimeout(self._remaining(deadline))
             # From here on, some or all of the request may have been delivered.
             sent = True
+            self._last_send = time.monotonic()
             sock.sendall(request)
 
             while True:

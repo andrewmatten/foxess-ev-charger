@@ -71,8 +71,14 @@ async def test_controlled_refused_start_is_retried_never_compensated_with_stop(r
     ctl = await rig.boot()
     rig.sim.inject_write(CTRL, "refuse", value=1, count=None)
     await rig.run(ctl.async_set_power(CAP))
-    with pytest.raises(ControlError, match="no active charging session"):
+    with pytest.raises(ControlError, match="no active charging session") as err:
         await rig.run(ctl.async_enable())
+    # The message carries what the charger reported and what was tried.
+    msg = str(err.value)
+    assert "work mode 0 (controlled)" in msg and "status 1 (connected)" in msg
+    assert "pilot" in msg and "stop reason" in msg
+    assert f"Start sent {starts(rig.sim)}x, {starts(rig.sim)} refused (Modbus exception 3)" in msg
+    assert "limits written 1.4 kW, 32.0 A (charger maximum, none saved)" in msg
     assert starts(rig.sim) >= 2                  # retried every START_RETRY_S
     assert stops(rig.sim) == 0
     assert not ctl.intent_enabled and rig.sim.power_limit_raw() == 0
@@ -161,9 +167,11 @@ async def test_plug_and_charge_never_sends_start(rigs):
     rig = rigs(work_mode=PLUG_AND_CHARGE, implicit_resume=False)
     ctl = await rig.boot()
     await rig.run(ctl.async_set_power(CAP))
-    with pytest.raises(ControlError, match="no active charging session"):
+    with pytest.raises(ControlError, match="no active charging session") as err:
         await rig.run(ctl.async_enable())
     assert starts(rig.sim) == 0
+    assert "work mode 1 (plug_and_charge)" in str(err.value)
+    assert "Start not sent" in str(err.value)
 
 
 async def test_plug_and_charge_replug_still_adopts_new_session(rigs):
@@ -177,4 +185,37 @@ async def test_plug_and_charge_replug_still_adopts_new_session(rigs):
     await rig.run(ctl.async_poll())
     rig.sim.plug()                               # Plug&Charge starts by itself
     await rig.clock.advance(300)
+    assert rig.sim.state == CHARGING and ctl.intent_enabled
+
+
+# ── both limits are written on enable (protocol V1.06, 2.37/2.38) ─────────
+
+@pytest.mark.parametrize("mode", [CONTROLLED, PLUG_AND_CHARGE])
+async def test_enable_without_saved_current_writes_charger_maximum_once(rigs, mode):
+    rig = rigs(work_mode=mode)
+    ctl = await rig.boot()
+    await rig.enable_at(CAP)
+    current_writes = [v for a, v in rig.sim.wire_writes() if a == C]
+    assert current_writes == [rig.sim.max_current_raw]
+    assert ctl.desired_current_raw is None       # not saved as intent
+    mark = rig.sim.mark()
+    await rig.clock.advance(600)                 # and never refreshed
+    assert C not in [a for a, _ in rig.sim.wire_writes(mark)]
+    assert rig.sim.state == CHARGING and rig.sim.power_limit_raw() == CAP
+
+
+async def test_enable_with_saved_current_writes_that_current(rigs):
+    rig = rigs(work_mode=CONTROLLED)
+    ctl = await rig.boot()
+    await rig.run(ctl.async_set_current(160))
+    await rig.enable_at(CAP)
+    assert [v for a, v in rig.sim.wire_writes() if a == C][0] == 160
+    assert rig.sim.max_current_raw not in [v for a, v in rig.sim.wire_writes() if a == C]
+
+
+async def test_enable_survives_charger_refusing_the_default_current_write(rigs):
+    rig = rigs(work_mode=PLUG_AND_CHARGE)
+    ctl = await rig.boot()
+    rig.sim.inject_write(C, "refuse", count=None)
+    await rig.enable_at(CAP)                     # best effort: not a failure
     assert rig.sim.state == CHARGING and ctl.intent_enabled
