@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (fork)
+
+- Added: Controlled work mode is supported alongside Plug&Charge. In Controlled mode, turning the Charging switch on writes the saved limits and then, if no session has opened, sends 0x4001 Start (re-sent every 15 s while the enable waits, up to the existing 45 s start timeout). A refused Start is not treated as a failure and is never followed by a Stop, because on some firmware the limit write has already opened the session. Start is sent only from an explicit enable, or from an enable that was staged while unplugged and is applied at plug-in.
+- Controlled mode with the switch off: no current limit, positive power limit or Start is written. A session that appears anyway is brought back to 0 kW (with the Stop fallback), and after an unplug and replug nothing is adopted: the 0 kW limit is re-asserted as soon as the cable is seen connected.
+- Plug&Charge behaviour is unchanged, including adopting a self-started session after a replug. Start is never sent in Plug&Charge.
+- The Repairs warning and the specific enable error now apply to Locked mode only. A start that times out in Controlled mode reports "no active charging session after enable".
+- Diagnostics: new `start_commands` counter.
+
 ## 3.1.2 - 2026-11-05
 
 - Fixed (confirmed on a 22 kW A022KP1, issue #4): charging blocked forever with "safety configuration unconfirmed" on chargers that refuse every Command Time Validity (0x3005) write, such as the 22 kW A022KP1. If the charger answers Modbus exception 3 and holds a value from 1 to 180 s, that value is accepted and a warning is logged. The limit is still refreshed every 30 s and the 6 A fallback must still confirm. Any other refusal, or a value outside that range, still blocks charging. Start, stop and current changes (6-32 A) confirmed working on that charger. Phase switching on three-phase chargers is not yet working (under investigation). What such a charger does if HA stops responding is untested. The 7.3 kW A7300P1 returns to its full rated power about 60 s after the last write, not to 6 A, so assume the same here until tested.

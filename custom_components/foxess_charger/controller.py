@@ -1,9 +1,16 @@
 """The single charging controller: the only code allowed to write the charger.
 
 On/off is expressed through the power setpoint (0x3002): paused means 0,
-enabled means the saved positive power. 0x4001 Start is never sent. 0x4001
-Stop is sent only as a fallback when a zero setpoint fails to stop a session,
-after which every cap/power write is suppressed until an explicit enable.
+enabled means the saved positive power. 0x4001 Stop is sent only as a
+fallback when a zero setpoint fails to stop a session, after which every
+cap/power write is suppressed until an explicit enable.
+
+Work modes: in Plug&Charge the charger opens sessions itself and 0x4001
+Start is never sent. In Controlled mode an explicit enable (and nothing
+else) may also send 0x4001 Start, after the limits are confirmed, when the
+limit writes alone did not open a session. A refused Start is not a failure
+and is never answered with a Stop: on some firmware the limit write has
+already opened the session and the redundant Start is rejected.
 
 Everything the controller wants the hardware to do is derived from one frozen
 ``Intent`` record. Each change bumps its revision and is persisted (with a
@@ -65,7 +72,12 @@ SAFETY_VALIDITY_S = 60
 MAX_FIXED_VALIDITY_S = 180
 MODBUS_ILLEGAL_DATA_VALUE = 3
 SAFETY_FALLBACK_CURRENT_RAW = 60   # 6 A
+START_COMMAND = 1
 STOP_COMMAND = 2
+CONTROLLED_MODE = 0                # Work Mode (0x3000) in which Start may be needed
+# Controlled mode: while an enable waits for its session, Start is re-sent at
+# most this often (a refused or lost Start is retried, never compensated).
+START_RETRY_S = 15.0
 OBSERVATION_GAP_S = 1.0            # pause needs two agreeing reads this far apart
 POLL_STEP_S = 0.5
 # A latch caused only by lost comms releases (paused) after this long healthy.
@@ -103,12 +115,11 @@ WRITE_ONLY_CONFIRMATION: dict[int, tuple[int, Callable[[int], int]]] = {
     REG_PHASE_SWITCHING: (REG_PHASE_SEQUENCE, lambda v: v),
 }
 
-# Only Plug&Charge (1) can start a session: this integration never sends 0x4001 Start.
+# Locked (2) never starts a session. Controlled (0) and Plug&Charge (1) are
+# both supported; a start that times out in those gets the generic message.
 WORK_MODE_ERRORS = {
-    0: "Charger is in Controlled mode, which this integration does not support. "
-       "Set the charger Work Mode to Plug&Charge.",
     2: "Charger Work Mode is Locked, so it will not start charging. "
-       "Set the charger Work Mode to Plug&Charge.",
+       "Set the charger Work Mode to Plug&Charge or Controlled.",
 }
 
 _REASON_TELEMETRY = "telemetry_uncertain"
@@ -277,6 +288,7 @@ class ChargingController:
                 "refreshes", "refresh_failures", "confirmations",
                 "unknown_outcomes", "refusals", "stop_fallbacks",
                 "implicit_resume_corrections", "superseded", "persist_failures",
+                "start_commands",
             ),
             0,
         )
@@ -619,7 +631,7 @@ class ChargingController:
         _LOGGER.error("FoxESS %s", self._last_error)
         return True
 
-    async def _track_unplug(self, ev: _Evidence) -> None:
+    async def _track_unplug(self, ev: _Evidence) -> bool:
         """Release a user pause on a confirmed unplug (SPEC 5.2).
 
         An ordinary user pause belongs to the vehicle that was plugged in.
@@ -630,18 +642,28 @@ class ChargingController:
         after replug (e.g. Plug&Charge/RFID) is adopted as enabled with the
         saved power. Invalid or unknown cc_status never counts as unplugged,
         and while the cable stays plugged a paused intent is never resumed.
+
+        Controlled mode is the exception on replug: there the charger is not
+        meant to open a session by itself, so nothing is adopted. The first
+        valid cc_status == 1 re-arms the pause (True is returned so the zero
+        goes back on the wire now) and only an explicit enable charges.
         """
         i = self._intent
         user_pause = self._explicit_zero() and not (i.safety_latched or i.stop_fallback)
         if not user_pause or not self._initialized:
             self._released, self._unplug_first = False, None
-            return
+            return False
         if self._released:
-            if ev.valid and ev.cc_status == 1 and ev.status in SESSION_STATUS:
+            if not (ev.valid and ev.cc_status == 1):
+                return False
+            if self._work_mode == CONTROLLED_MODE:
+                self._released = False
+                return True
+            if ev.status in SESSION_STATUS:
                 self._released = False
                 await self._update(enabled=True)
                 self._spawn(self._op_apply)
-            return
+            return False
         if ev.valid and ev.cc_status == 0:
             if self._unplug_first is None:
                 self._unplug_first = ev.at
@@ -649,6 +671,7 @@ class ChargingController:
                 self._released, self._unplug_first = True, None
         else:
             self._unplug_first = None
+        return False
 
     def _note_readback(self, mismatched: bool) -> None:
         """Track refresh read-back mismatches (the charger ignoring our cap)."""
@@ -786,8 +809,25 @@ class ChargingController:
                 raise ControlError("no valid charger status; enable not applied")
             await self._sleep(POLL_STEP_S)
 
+    async def _controlled_mode(self) -> bool:
+        """Whether the charger is in Controlled mode, from a fresh read of
+        0x3000; if that fails, from the last value a poll decoded."""
+        regs = await self._read(REG_WORK_MODE)
+        if regs is not None and regs[0] in WORK_MODE_MAP:
+            self._work_mode = regs[0]
+        return self._work_mode == CONTROLLED_MODE
+
     async def _confirm_session(self, wire, deadline) -> bool:
-        """True once a session is seen; False if the cable is definitely unplugged."""
+        """True once a session is seen; False if the cable is definitely unplugged.
+
+        Only reached from an explicit enable (or a staged one applied on
+        plug-in) with the positive limits already confirmed. In Controlled
+        mode, a valid frame showing the cable connected and no session gets
+        0x4001 Start, re-sent every START_RETRY_S while waiting. The outcome
+        of the Start write itself is not judged (refused = a session is
+        already opening); only the status decides."""
+        controlled = await self._controlled_mode()
+        next_start = self._clock()
         while True:
             self._check(wire)
             ev = await self._observe()
@@ -800,6 +840,14 @@ class ChargingController:
                 return False
             if ev.valid and ev.cc_status == 1 and ev.status in SESSION_STATUS:
                 return True
+            if (
+                controlled and ev.valid and ev.status in STOPPED_STATUS
+                and self._clock() >= next_start
+            ):
+                next_start = self._clock() + START_RETRY_S
+                self._counters["start_commands"] += 1
+                await self._send(REG_CHARGING_CONTROL, START_COMMAND, wire)
+                continue    # look again right away: Start usually shows at once
             if self._clock() >= deadline:
                 raise ControlError(WORK_MODE_ERRORS.get(
                     self._work_mode, "no active charging session after enable"))
@@ -1145,7 +1193,7 @@ class ChargingController:
             await self._note_link_health(ev, None)
             changed = await self._note_session(ev) or changed
             changed = await self._note_starting(ev) or changed
-            await self._track_unplug(ev)
+            changed = await self._track_unplug(ev) or changed
         if changed:
             self._spawn(self._op_refresh)  # write the protective/restored value now
         self._maybe_correct(ev)
