@@ -702,7 +702,7 @@ class ChargingController:
         if self._await_plug:
             if ev.cc_status == 1:
                 self._await_plug = False
-                self._spawn(self._op_apply)   # the staged explicit enable
+                self._spawn(lambda: self._op_apply(enabling=True))   # the staged explicit enable
             return False
         self._last_error = f"session ended (status {ev.status}); enable revoked"
         _LOGGER.info("FoxESS %s", self._last_error)
@@ -819,7 +819,9 @@ class ChargingController:
             await self._sleep(POLL_STEP_S)
 
     # ── operations (each runs as an owned task) ──────────────────────────
-    async def _op_apply(self, revision: int | None = None) -> CommandResult:
+    async def _op_apply(
+        self, revision: int | None = None, enabling: bool = False,
+    ) -> CommandResult:
         """Apply the latest intent. A command passes the revision it created: if
         intent moved on since, the latest intent is still applied (a newer
         staged change may not write anything itself) but the command reports
@@ -828,7 +830,7 @@ class ChargingController:
             self._busy += 1
             try:
                 overtaken = revision is not None and self._intent.revision != revision
-                result = await self._apply_locked()
+                result = await self._apply_locked(enabling)
                 if overtaken:
                     self._counters["superseded"] += 1
                     return CommandResult("superseded", self._intent.revision)
@@ -842,7 +844,7 @@ class ChargingController:
             finally:
                 self._busy -= 1
 
-    async def _apply_locked(self) -> CommandResult:
+    async def _apply_locked(self, enabling: bool = False) -> CommandResult:
         intent, wire = self._intent, self._wire()
         power, current = wire
         if intent.stop_fallback:
@@ -857,7 +859,8 @@ class ChargingController:
                 await self._revoke()
                 raise
         self._enable_current = None
-        if power and current is None:
+        # Only an explicit enable: later limit changes must not add a write.
+        if enabling and power and current is None:
             await self._write_rated_current(wire)
         try:
             # Each register gets its own fresh confirmation_timeout window
@@ -1518,7 +1521,7 @@ class ChargingController:
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
                 latch_cause=None,
             )
-            return await self._run(lambda: self._op_apply(intent.revision))
+            return await self._run(lambda: self._op_apply(intent.revision, True))
 
         return await self._command(enable)
 

@@ -219,3 +219,15 @@ async def test_enable_survives_charger_refusing_the_default_current_write(rigs):
     rig.sim.inject_write(C, "refuse", count=None)
     await rig.enable_at(CAP)                     # best effort: not a failure
     assert rig.sim.state == CHARGING and ctl.intent_enabled
+
+
+@pytest.mark.parametrize("mode", [CONTROLLED, PLUG_AND_CHARGE])
+async def test_power_change_while_charging_does_not_rewrite_current(rigs, mode):
+    rig = rigs(work_mode=mode)
+    ctl = await rig.boot()
+    await rig.enable_at(CAP)
+    mark = rig.sim.mark()
+    await rig.run(ctl.async_set_power(CAP + 6))     # CAP is the minimum; go up
+    await rig.clock.advance(60)
+    assert C not in [a for a, _ in rig.sim.wire_writes(mark)]
+    assert [v for a, v in rig.sim.wire_writes(mark) if a == P and v > 0]   # the new cap did go out
