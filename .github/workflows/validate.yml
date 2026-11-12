@@ -31,6 +31,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # test_persistence reads the 2.4.3 release from git history
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
