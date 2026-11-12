@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.1.3 - 2026-11-11
+## 3.1.3-beta.1 - 2026-11-12
 
 - Fixed (6 Nov): a fault latch could hold for hours when the link kept dropping single frames, because every lost frame restarted the release timer. Only drawing, a fault, a real read-back mismatch or about 20 s of bad frames restart it now. A lost read-back counts as no evidence, not as a mismatch.
 - Fixed (6 Nov): a Stop that worked after a lost zero write was recorded as a failed Stop and stayed latched. It is now a normal recoverable latch.
@@ -21,7 +21,7 @@
 - Setup now rejects a port outside 1-65535 or a Modbus unit ID outside 0-255 on the form. Setting a number to a value the charger can't accept now shows a normal error instead of a traceback.
 - An offline charger or a failing storage write is logged once, with a note when it recovers, instead of on every poll.
 - Tests now run in CI, and releases go through `scripts/release.sh`.
-- Not yet confirmed on a real charger: everything in this release was checked in simulation only.
+- Confirmed on a real 7.3 kW charger in Plug&Charge (firmware 1.10): power-cap steps, pause/resume, plug-in, and refusal of a Work Mode change while a car is connected. **Not yet run on a real charger:** Controlled mode, the new 500 ms request spacing on other models, and 22 kW or three-phase chargers.
 - Added (PR #5, thanks to loadrunner42): Controlled work mode is supported alongside Plug&Charge. In Controlled mode, turning the Charging switch on writes the saved limits and then, if no session has opened, sends 0x4001 Start (re-sent every 15 s while the enable waits, up to the existing 45 s start timeout). A refused Start is not treated as a failure and is never followed by a Stop, because on some firmware the limit write has already opened the session. Start is sent only from an explicit enable, or from an enable that was staged while unplugged and is applied at plug-in.
 - Controlled mode with the switch off: no current limit, positive power limit or Start is written. A session that appears anyway is brought back to 0 kW (with the Stop fallback), and after an unplug and replug nothing is adopted: the 0 kW limit is re-asserted as soon as the cable is seen connected.
 - Plug&Charge behaviour is unchanged, including adopting a self-started session after a replug. Start is never sent in Plug&Charge.
