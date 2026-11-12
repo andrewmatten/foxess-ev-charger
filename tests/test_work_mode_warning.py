@@ -1,6 +1,6 @@
-"""Only Plug&Charge works (the integration never sends 0x4001 Start), so a
-charger in Controlled or Locked mode gets a specific enable error and a
-Repairs issue instead of the generic "no active charging session"."""
+"""Plug&Charge and Controlled both work (in Controlled mode an enable may
+send 0x4001 Start). A charger in Locked mode gets a specific enable error
+and a Repairs issue instead of the generic "no active charging session"."""
 from __future__ import annotations
 
 import pytest
@@ -40,31 +40,31 @@ async def failed_enable(work_mode, *, poll=True):
     return str(err.value)
 
 
-async def test_controlled_mode_gets_specific_message():
-    msg = await failed_enable(0)
-    assert "Controlled mode" in msg and "Plug&Charge" in msg
+async def test_controlled_mode_keeps_generic_message():
+    assert (await failed_enable(0)).startswith(GENERIC)
 
 
 async def test_locked_mode_gets_its_own_message():
     msg = await failed_enable(2)
-    assert "Locked" in msg and "Plug&Charge" in msg
+    assert "Locked" in msg and "Plug&Charge" in msg and "Controlled" in msg
     assert msg != await failed_enable(0)
 
 
 async def test_plug_and_charge_keeps_generic_message():
-    assert await failed_enable(1) == GENERIC
+    assert (await failed_enable(1)).startswith(GENERIC)
 
 
 async def test_unknown_work_mode_keeps_generic_message():
-    assert await failed_enable(0, poll=False) == GENERIC
-    assert await failed_enable(7) == GENERIC
+    assert (await failed_enable(0, poll=False)).startswith(GENERIC)
+    assert (await failed_enable(7)).startswith(GENERIC)
 
 
 async def test_failed_config_read_keeps_last_known_mode():
     clock = FakeClock()
     io = FakeIO(clock, charging=False)
     io.car_draw = False
-    modes = iter([0, None])
+    io.regs[0x3000] = 2
+    modes = iter([2, None])
 
     async def read_snapshot(io_):
         snap = await snapshot(io_)
@@ -75,14 +75,13 @@ async def test_failed_config_read_keeps_last_known_mode():
     await c.async_initialize(saved(enabled=False), configure_safety=False)
     await c.async_poll()
     await c.async_poll()
-    with pytest.raises(ControlError, match="Controlled mode"):
+    with pytest.raises(ControlError, match="Locked"):
         await c.async_enable()
 
 
-@pytest.mark.parametrize("mode", [0, 2])
-async def test_issue_created_for_wrong_mode(hass, enable_custom_integrations, mode):
+async def test_issue_created_for_locked_mode(hass, enable_custom_integrations):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = mode
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
@@ -95,14 +94,16 @@ async def test_issue_created_for_wrong_mode(hass, enable_custom_integrations, mo
         await h.async_unload()
 
 
-async def test_issue_cleared_when_switched_to_plug_and_charge(hass, enable_custom_integrations):
+@pytest.mark.parametrize("working_mode", [0, 1])
+async def test_issue_cleared_when_switched_to_a_working_mode(
+        hass, enable_custom_integrations, working_mode):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 0
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
         assert issue(hass) is not None
-        fake.hw["work_mode"] = 1
+        fake.hw["work_mode"] = working_mode
         await hass.data[DOMAIN][ENTRY]["coordinator"].async_refresh()
         assert issue(hass) is None
         fake.hw["work_mode"] = 2
@@ -112,9 +113,10 @@ async def test_issue_cleared_when_switched_to_plug_and_charge(hass, enable_custo
         await h.async_unload()
 
 
-async def test_no_issue_for_plug_and_charge(hass, enable_custom_integrations):
+@pytest.mark.parametrize("mode", [0, 1])
+async def test_no_issue_for_controlled_or_plug_and_charge(hass, enable_custom_integrations, mode):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 1
+    fake.hw["work_mode"] = mode
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
@@ -125,7 +127,7 @@ async def test_no_issue_for_plug_and_charge(hass, enable_custom_integrations):
 
 async def test_failed_config_read_neither_creates_nor_clears(hass, enable_custom_integrations):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 0
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
@@ -139,7 +141,7 @@ async def test_failed_config_read_neither_creates_nor_clears(hass, enable_custom
         await coordinator.async_refresh()
         assert issue(hass) is None
         fake.config_ok = False
-        fake.hw["work_mode"] = 0
+        fake.hw["work_mode"] = 2
         await coordinator.async_refresh()
         assert issue(hass) is None              # not created by a failed read
         fake.config_ok = True
@@ -151,7 +153,7 @@ async def test_failed_config_read_neither_creates_nor_clears(hass, enable_custom
 
 async def test_issue_only_touched_on_change(hass, enable_custom_integrations):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 0
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
@@ -164,7 +166,7 @@ async def test_issue_only_touched_on_change(hass, enable_custom_integrations):
 
 async def test_issue_removed_on_unload(hass, enable_custom_integrations):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 0
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     assert issue(hass) is not None
@@ -183,19 +185,19 @@ def test_issue_strings_exist():
     assert strings["title"] and "{mode}" in strings["description"]
 
 
-async def test_issue_mode_placeholder_follows_controlled_locked_change(hass, enable_custom_integrations):
+async def test_issue_follows_locked_and_controlled_changes(hass, enable_custom_integrations):
     fake = FakeController(status=1)
-    fake.hw["work_mode"] = 0
+    fake.hw["work_mode"] = 2
     h = Harness(hass, make_entry(ENTRY), fake)
     assert await h.async_setup()
     try:
         coordinator = hass.data[DOMAIN][ENTRY]["coordinator"]
-        assert "controlled" in issue(hass).translation_placeholders["mode"].lower()
-        fake.hw["work_mode"] = 2
-        await coordinator.async_refresh()
         assert "locked" in issue(hass).translation_placeholders["mode"].lower()
         fake.hw["work_mode"] = 0
         await coordinator.async_refresh()
-        assert "controlled" in issue(hass).translation_placeholders["mode"].lower()
+        assert issue(hass) is None
+        fake.hw["work_mode"] = 2
+        await coordinator.async_refresh()
+        assert "locked" in issue(hass).translation_placeholders["mode"].lower()
     finally:
         await h.async_unload()

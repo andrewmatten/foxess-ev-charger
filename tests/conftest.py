@@ -41,6 +41,7 @@ def _real_sockets_for_modbus_loopback_tests(request):
     if request.module.__name__.rsplit(".", 1)[-1] not in (
         "test_modbus_slow_replies",
         "test_modbus_client_outcomes",
+        "test_modbus_message_interval",
     ):
         yield
         return

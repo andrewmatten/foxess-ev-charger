@@ -47,7 +47,12 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 
 The connection is verified during setup — if the charger can't be reached, you'll see an error on the form immediately rather than a silently-broken entry.
 
-**The charger's Work Mode must be set to Plug&Charge.** Controlled and Locked modes will not start charging with this integration; Home Assistant raises a Repairs warning if the charger is in either.
+**The charger's Work Mode can be Plug&Charge or Controlled.** Locked mode will not start charging; Home Assistant raises a Repairs warning while the charger is in it.
+
+Change the Work Mode only while no car is connected: the charger applies it only then, and the integration refuses the change otherwise.
+
+- **Plug&Charge** - the charger opens a session by itself at plug-in. The Charging switch pauses and resumes it through the power limit. After an unplug and replug, a session the charger starts by itself is adopted and the switch turns on.
+- **Controlled** - nothing charges until the Charging switch is turned on. Turning it on writes the saved limits and, if that alone does not open a session, sends the charger's Start command. With the switch off the integration writes no current limit and no Start, re-asserts a 0 kW limit while a car is connected, and stops any session that appears anyway, including after an unplug and replug.
 
 The scan interval is configurable via the integration options (default 10 s, range 5-300 s).
 

@@ -40,8 +40,8 @@
   },
   "issues": {
     "wrong_work_mode": {
-      "title": "Charger Work Mode must be Plug&Charge",
-      "description": "The charger's Work Mode is set to {mode}. This integration only works with Plug&Charge: in any other mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge (Work Mode select on the charger device)."
+      "title": "Charger Work Mode prevents charging",
+      "description": "The charger's Work Mode is set to {mode}. In this mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge or Controlled (Work Mode select on the charger device)."
     },
     "needs_human": {
       "title": "Charger needs your attention",

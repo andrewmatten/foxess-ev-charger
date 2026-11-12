@@ -41,11 +41,12 @@ async def async_create_controller(hass: HomeAssistant, entry: ConfigEntry, *, pe
     """The single factory for the hardware stack (client -> transport ->
     controller). Imported lazily so the adapters load without it."""
     from .controller import ChargingController
-    from .modbus_client import FoxESSModbusClient
+    from .modbus_client import PROTOCOL_MESSAGE_INTERVAL, FoxESSModbusClient
     from .transport import ModbusRegisterIO
 
     client = FoxESSModbusClient(
         entry.data[CONF_HOST], entry.data[CONF_PORT], entry.data[CONF_SLAVE_ID],
+        min_interval=PROTOCOL_MESSAGE_INTERVAL,
     )
     return ChargingController(ModbusRegisterIO(client), persist=persist)
 

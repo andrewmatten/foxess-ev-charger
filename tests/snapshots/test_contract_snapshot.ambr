@@ -15679,8 +15679,8 @@
       'issues': dict({
         'issues.needs_human.description': 'The charger reported a fault that will not clear by itself, so charging stays off. Check the charger and the car. When it is safe, turn the Charging switch on yourself to resume.',
         'issues.needs_human.title': 'Charger needs your attention',
-        'issues.wrong_work_mode.description': "The charger's Work Mode is set to {mode}. This integration only works with Plug&Charge: in any other mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge (Work Mode select on the charger device).",
-        'issues.wrong_work_mode.title': 'Charger Work Mode must be Plug&Charge',
+        'issues.wrong_work_mode.description': "The charger's Work Mode is set to {mode}. In this mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge or Controlled (Work Mode select on the charger device).",
+        'issues.wrong_work_mode.title': 'Charger Work Mode prevents charging',
       }),
       'keys': list([
         'config.abort.already_configured',

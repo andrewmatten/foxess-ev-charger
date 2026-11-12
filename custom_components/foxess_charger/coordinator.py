@@ -213,7 +213,8 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
     def _sync_work_mode_issue(self, work_mode) -> None:
         if work_mode not in WORK_MODE_MAP:
             return
-        wrong = work_mode if work_mode != 1 else None
+        # Controlled (0) and Plug&Charge (1) both work; only Locked (2) cannot charge.
+        wrong = work_mode if work_mode == 2 else None
         if wrong == self._wrong_work_mode:
             return
         self._wrong_work_mode = wrong
