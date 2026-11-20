@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.4-beta.1 - 2026-11-20
+
+- Fixed: pausing right after the cable was unplugged and plugged back in skipped the zero write, and in Controlled mode could send Start (0x4001) with no power limit. A pause now always writes zero, and switching on after such an unplug is staged until plug-in as before.
+- Fixed: a limit change that lands just as the car finishes no longer writes a positive limit to the finished session (which could reopen it). The change is refused and charging stays off.
+- Found by an independent review (Gemini, Codex) of 3.1.3; regression tests added for both.
+
 ## 3.1.3 - 2026-11-20
 
 - Fixed (6 Nov): a fault latch could hold for hours when the link kept dropping single frames, because every lost frame restarted the release timer. Only drawing, a fault, a real read-back mismatch or about 20 s of bad frames restart it now. A lost read-back counts as no evidence, not as a mismatch.

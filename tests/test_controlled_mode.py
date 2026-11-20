@@ -231,3 +231,63 @@ async def test_power_change_while_charging_does_not_rewrite_current(rigs, mode):
     await rig.clock.advance(60)
     assert C not in [a for a, _ in rig.sim.wire_writes(mark)]
     assert [v for a, v in rig.sim.wire_writes(mark) if a == P and v > 0]   # the new cap did go out
+
+
+# ── 3.1.4: no Start from a pause or a limit change (review 20 Nov 2026) ──
+
+async def test_pause_right_after_replug_writes_zero_and_never_starts(rigs):
+    rig = rigs(work_mode=CONTROLLED)
+    ctl = await rig.boot()
+    await rig.enable_at(CAP)
+    assert (await rig.run(ctl.async_pause())).outcome == "confirmed"
+    await rig.run(ctl.async_poll())
+    rig.sim.unplug()
+    await rig.clock.advance(30)
+    await rig.run(ctl.async_poll())              # pause released by the unplug
+    rig.sim.plug()                               # replugged, no poll yet
+    mark = rig.sim.mark()
+    await rig.run(ctl.async_pause())
+    assert starts(rig.sim, mark) == 0
+    assert not positive_limits(rig.sim, mark)
+    await rig.clock.advance(120)
+    assert not ctl.intent_enabled
+    assert rig.sim.measured_power_raw() == 0 and rig.sim.state != CHARGING
+
+
+async def test_controlled_limit_change_as_session_finishes_never_starts(rigs):
+    rig = rigs(work_mode=CONTROLLED)
+    ctl = await rig.boot()
+    await rig.enable_at(CAP)
+    observe = ctl._op_observe
+
+    async def finish_after_check():              # car finishes between check and apply
+        ok = await observe()
+        rig.sim.state = FINISHED
+        return ok
+
+    ctl._op_observe = finish_after_check
+    mark = rig.sim.mark()
+    try:
+        await rig.run(ctl.async_set_power(CAP + 6))
+    except ControlError:
+        pass
+    await rig.clock.advance(60)
+    assert starts(rig.sim, mark) == 0
+    assert rig.sim.state != CHARGING
+
+
+async def test_controlled_enable_while_unplugged_after_released_pause_is_staged(rigs):
+    rig = rigs(work_mode=CONTROLLED)
+    ctl = await rig.boot()
+    await rig.enable_at(CAP)
+    assert (await rig.run(ctl.async_pause())).outcome == "confirmed"
+    await rig.run(ctl.async_poll())
+    rig.sim.unplug()
+    await rig.clock.advance(30)
+    await rig.run(ctl.async_poll())              # pause released by the unplug
+    assert (await rig.run(ctl.async_enable())).outcome == "staged"
+    await rig.run(ctl.async_poll())
+    rig.sim.plug()
+    await rig.run(ctl.async_poll())
+    await rig.clock.advance(30)
+    assert ctl.intent_enabled and rig.sim.state == CHARGING

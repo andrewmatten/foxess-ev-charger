@@ -854,7 +854,7 @@ class ChargingController:
             return CommandResult("confirmed", intent.revision, None)
         if power:
             try:
-                await self._preflight(wire, self._clock() + self._start_timeout)
+                await self._preflight(wire, self._clock() + self._start_timeout, enabling)
             except ControlError:
                 await self._revoke()
                 raise
@@ -886,7 +886,7 @@ class ChargingController:
             if await self._await_evidence(ok, wire, pause_deadline) is None:
                 await self._stop_sequence()
                 return CommandResult("confirmed", self._intent.revision, None)
-        elif power != 0:
+        elif power:     # None = nothing written: never confirm (or Start) a session
             try:
                 started = await self._confirm_session(
                     wire, self._clock() + self._start_timeout
@@ -933,7 +933,7 @@ class ChargingController:
                 "FoxESS current limit %.1f A not confirmed by read-back; "
                 "continuing with the power limit", self._max_current / 10)
 
-    async def _preflight(self, wire, deadline) -> None:
+    async def _preflight(self, wire, deadline, enabling: bool = True) -> None:
         """Before any positive write: a fresh valid, fault-free frame. An
         unplugged cable passes (the enable is then staged); a refusing status,
         a fault, or no valid frame within the telemetry grace raises."""
@@ -943,6 +943,10 @@ class ChargingController:
             self._abort_if_unsafe()
             if ev.valid and ev.status in REFUSING_STATUS:
                 raise ControlError(f"charger refuses to charge (status {ev.status})")
+            # A limit change is not an enable: a positive write to a finished
+            # session can reopen it, so it needs the session still active.
+            if ev.valid and not enabling and not self._session_active(ev):
+                raise ControlError("charging session ended; limit change not applied")
             if ev.valid:
                 return
             if self._clock() >= deadline:
@@ -1517,6 +1521,7 @@ class ChargingController:
             if self.needs_human and not clear_hard:
                 raise ControlError("charging is off after a fault that needs a person: "
                                    "turn the charging switch on yourself in Home Assistant")
+            self._released = False      # an explicit enable owns the wire again
             intent = await self._update_positive(
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
                 latch_cause=None,
@@ -1531,6 +1536,9 @@ class ChargingController:
 
     async def async_pause(self) -> CommandResult:
         self._require_ready()
+        # An explicit pause always writes zero, even just after an unplug
+        # released the previous pause.
+        self._released = False
         intent = await self._update(enabled=False)
         result = await self._run(lambda: self._op_apply(intent.revision))
         if self._persist_pending:
