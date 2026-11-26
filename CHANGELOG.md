@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Changed (HACS review): Command Time Validity (0x3005) and Default Current (0x3006) that you set through their number entities are now saved and written again on every setup. Before, each Home Assistant start or integration reload put them back to 60 s and 6 A. Those defaults are still written when you never set a value. See *Fallback settings* in the README.
+- README: installing now starts with a HACS search; adding a custom repository is the fallback.
+
 ## 3.1.4-beta.1 - 2026-11-20
 
 - Fixed: pausing right after the cable was unplugged and plugged back in skipped the zero write, and in Controlled mode could send Start (0x4001) with no power limit. A pause now always writes zero, and switching on after such an unplug is staged until plug-in as before.

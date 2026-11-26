@@ -22,10 +22,10 @@ Entities disabled by default (three-phase models; the phase selector and phase s
 
 ### HACS (recommended)
 
-1. In HACS, open the three-dot menu → **Custom repositories**.
-2. Add `https://github.com/andrewmatten/foxess-ev-charger` with category **Integration**.
-3. Search for **FoxESS EV Charger** in HACS and install it.
-4. Restart Home Assistant.
+1. In HACS, search for **FoxESS EV Charger** and install it.
+2. Restart Home Assistant.
+
+If it does not show up in the search, add it as a custom repository: in HACS open the three-dot menu → **Custom repositories**, add `https://github.com/andrewmatten/foxess-ev-charger` with category **Integration**, then search and install as above.
 
 ### Manual
 
@@ -73,6 +73,15 @@ The scan interval is configurable via the integration options (default 10 s, ran
 - **Diagnostics**: download a diagnostics file from the integration's device page (Settings → Devices & Services → FoxESS EV Charger → ⋮ → Download diagnostics) — includes detected model/capabilities, per-block polling health, and Modbus transport error counters. Host/IP and the RFID card value are redacted.
 - **Device triggers**: Vehicle Plugged In, Charging Started, Charging Stopped, Session Completed, Fault, Alarm — available from a device's own trigger picker when building automations, in addition to plain entity state triggers.
 - **Blueprint**: [`blueprints/automation/foxess_charger/solar_surplus_charging.yaml`](blueprints/automation/foxess_charger/solar_surplus_charging.yaml) — holds grid import near a configurable ceiling by adjusting Max Charging Current. Grid power sensors must report W or kW; kW readings are converted to W, and unavailable, nonnumeric, or unsupported-unit readings stop charging. Its dwell timer is based on actual current changes, so the once-per-minute safety check does not prevent normal adjustments. When starting from stopped, Home Assistant calls the number service before the switch service, but the integration may defer the physical register write; the blueprint cannot guarantee the new limit is active before charging starts. Grid-limit/surplus control only; no tariff or cost logic.
+
+## Fallback settings (Command Time Validity, Default Current)
+
+If Home Assistant stops refreshing the power limit (a restart, a crash, a lost link), the charger drops to its **Default Current** once the **Command Time Validity** runs out. Each time the integration sets up (Home Assistant start, integration reload) it writes these two settings to the charger and reads them back; charging can't be turned on until that is confirmed.
+
+- If you never changed them in Home Assistant, it writes the safe defaults: **60 s** and **6 A**. Values set earlier in the FoxESS app are replaced by these.
+- If you set either number in Home Assistant, your value is saved and written again on every setup instead of the default.
+
+Some models (for example the A022KP1) refuse Command Time Validity writes and keep their own fixed value. The integration accepts it if it is 180 s or less.
 
 ## When charging stops by itself
 

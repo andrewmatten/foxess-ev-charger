@@ -299,6 +299,9 @@ class ChargingController:
         self._hold_since: float | None = None       # recovery hold start (_op_refresh)
         self._cap_at: float | None = None           # last acknowledged positive cap write
         self._next_safety_try = 0.0
+        # 0x3005 / 0x3006 values the user set through the number entities;
+        # setup re-asserts these and uses 60 s / 6 A only where none was set.
+        self._user_safety: dict[int, int] = {}
         self._persisted = True
         # Latest intent not yet durable; retried from the refresh loop.
         self._persist_pending = False
@@ -432,6 +435,8 @@ class ChargingController:
             "comms_latch": i.safety_latched and i.latch_cause == "comms",
             # Epoch seconds: the monotonic clock restarts with the process.
             "latch_releases": [round(wall - (now - t), 1) for t in self._releases],
+            "user_time_validity_s": self._user_safety.get(REG_TIME_VALIDITY),
+            "user_default_current_raw": self._user_safety.get(REG_DEFAULT_CURRENT),
         }
 
     # ── derived wire values ──────────────────────────────────────────────
@@ -1132,14 +1137,16 @@ class ChargingController:
         try:
             try:
                 await self._write_confirmed(
-                    REG_TIME_VALIDITY, SAFETY_VALIDITY_S, None,
+                    REG_TIME_VALIDITY,
+                    self._user_safety.get(REG_TIME_VALIDITY, SAFETY_VALIDITY_S), None,
                     min(deadline, self._clock() + self._timeout))
             except ControlError:
                 if not await self._accept_fixed_validity():
                     raise
             await self._write_confirmed(
-                REG_DEFAULT_CURRENT, SAFETY_FALLBACK_CURRENT_RAW, None,
-                min(deadline, self._clock() + self._timeout))
+                REG_DEFAULT_CURRENT,
+                self._user_safety.get(REG_DEFAULT_CURRENT, SAFETY_FALLBACK_CURRENT_RAW),
+                None, min(deadline, self._clock() + self._timeout))
         except ControlError as err:
             self._last_error = f"safety configuration: {err}"
             _LOGGER.error("Safety configuration unconfirmed; enable blocked, will retry")
@@ -1354,6 +1361,11 @@ class ChargingController:
             if isinstance(saved, dict):
                 self._releases = _parse_releases(
                     saved, self._wall(), self._clock(), saved.get("safety_latched") is True)
+                for reg, key in ((REG_TIME_VALIDITY, "user_time_validity_s"),
+                                 (REG_DEFAULT_CURRENT, "user_default_current_raw")):
+                    v, (lo, hi) = saved.get(key), REGISTER_ALLOWLIST[reg]
+                    if _is_int(v) and lo <= v <= hi:   # anything else: safe default
+                        self._user_safety[reg] = v
             parsed = _parse_saved(saved)
             if parsed is None:
                 _LOGGER.warning("Saved charging intent is malformed; starting paused")
@@ -1591,6 +1603,10 @@ class ChargingController:
                     await self._sleep(min(self._retry, max(0.0, deadline - self._clock())))
             if address == REG_TIME_VALIDITY:
                 self._set_validity(value)
+            if address in (REG_TIME_VALIDITY, REG_DEFAULT_CURRENT):
+                # The user's choice: re-asserted on every setup from now on.
+                self._user_safety[address] = value
+                self._persisted = await self._save_intent()
             self._counters["confirmations"] += 1
             return CommandResult("confirmed", self._intent.revision, observed)
 
