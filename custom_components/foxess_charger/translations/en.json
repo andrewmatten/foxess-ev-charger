@@ -250,9 +250,9 @@
       "work_mode_control": {
         "name": "Work Mode",
         "state": {
-          "controlled": "Controlled",
-          "plug_and_charge": "Plug & Charge",
-          "locked": "Locked"
+          "Controlled": "Controlled",
+          "Plug&Charge": "Plug & Charge",
+          "Locked": "Locked"
         }
       },
       "phase_switching_control": {

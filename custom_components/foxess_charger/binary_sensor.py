@@ -79,34 +79,34 @@ def _unlocked(data: Observation) -> bool | None:
 
 BINARY_SENSORS: tuple[FoxESSBinarySensorEntityDescription, ...] = (
     FoxESSBinarySensorEntityDescription(
-        key="is_charging", name="Charging", translation_key="is_charging",
+        key="is_charging", translation_key="is_charging",
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING, icon="mdi:battery-charging",
         # Power flowing only. A vehicle pause still counts as a session for
         # the Charging switch, but not as charging here.
         value_fn=_when_known("status", lambda status: status == _CHARGING),
     ),
     FoxESSBinarySensorEntityDescription(
-        key="vehicle_connected", name="Vehicle Connected", translation_key="vehicle_connected",
+        key="vehicle_connected", translation_key="vehicle_connected",
         device_class=BinarySensorDeviceClass.PLUG, icon="mdi:power-plug",
         value_fn=_when_known("cc_status", lambda cable: cable == 1),
     ),
     FoxESSBinarySensorEntityDescription(
-        key="has_fault", name="Fault", translation_key="has_fault",
+        key="has_fault", translation_key="has_fault",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert-circle",
         value_fn=_has_fault,
     ),
     FoxESSBinarySensorEntityDescription(
-        key="has_alarm", name="Alarm", translation_key="has_alarm",
+        key="has_alarm", translation_key="has_alarm",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert",
         value_fn=_has_alarm,
     ),
     FoxESSBinarySensorEntityDescription(
-        key="is_locked", name="Locked", translation_key="is_locked",
+        key="is_locked", translation_key="is_locked",
         device_class=BinarySensorDeviceClass.LOCK, icon="mdi:lock",
         value_fn=_unlocked,
     ),
     FoxESSBinarySensorEntityDescription(
-        key="auto_phase_switch", name="Auto Phase Switch", translation_key="auto_phase_switch",
+        key="auto_phase_switch", translation_key="auto_phase_switch",
         icon="mdi:auto-fix",
         entity_registry_enabled_default=False,  # three-phase models only
         block=BLOCK_PHASE_BOX,

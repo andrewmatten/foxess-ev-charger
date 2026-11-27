@@ -232,7 +232,7 @@ def _enum_options(table: dict[int, str]) -> list[str]:
 def _voltage(phase: int, *, enabled: bool) -> FoxESSSensorEntityDescription:
     key = f"l{phase}_voltage"
     return FoxESSSensorEntityDescription(
-        key=key, name=f"L{phase} Voltage", translation_key=key, icon="mdi:flash",
+        key=key, translation_key=key, icon="mdi:flash",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
@@ -244,10 +244,10 @@ def _voltage(phase: int, *, enabled: bool) -> FoxESSSensorEntityDescription:
     )
 
 
-def _current(key: str, name: str, raw_key: str, *, measured: bool = True,
+def _current(key: str, raw_key: str, *, measured: bool = True,
              enabled: bool = True) -> FoxESSSensorEntityDescription:
     return FoxESSSensorEntityDescription(
-        key=key, name=name, translation_key=key, icon="mdi:current-ac",
+        key=key, translation_key=key, icon="mdi:current-ac",
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT if measured else None,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
@@ -259,10 +259,10 @@ def _current(key: str, name: str, raw_key: str, *, measured: bool = True,
     )
 
 
-def _power(key: str, name: str, raw_key: str, *, icon: str, digits: int,
+def _power(key: str, raw_key: str, *, icon: str, digits: int,
            measured: bool) -> FoxESSSensorEntityDescription:
     return FoxESSSensorEntityDescription(
-        key=key, name=name, translation_key=key, icon=icon,
+        key=key, translation_key=key, icon=icon,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT if measured else None,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -271,11 +271,11 @@ def _power(key: str, name: str, raw_key: str, *, icon: str, digits: int,
     )
 
 
-def _enum_sensor(key: str, name: str, icon: str, data_key: str, table: dict[int, str], *,
+def _enum_sensor(key: str, icon: str, data_key: str, table: dict[int, str], *,
                  translation_key: str | None = None, block: str = BLOCK_STATUS,
                  enabled: bool = True) -> FoxESSSensorEntityDescription:
     return FoxESSSensorEntityDescription(
-        key=key, name=name, translation_key=translation_key or key, icon=icon,
+        key=key, translation_key=translation_key or key, icon=icon,
         device_class=SensorDeviceClass.ENUM, options=_enum_options(table),
         entity_registry_enabled_default=enabled, block=block,
         value_fn=_decoded(data_key, table),
@@ -285,17 +285,17 @@ def _enum_sensor(key: str, name: str, icon: str, data_key: str, table: dict[int,
 SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # Identity (diagnostic).
     FoxESSSensorEntityDescription(
-        key="software_version", name="Software Version", translation_key="software_version",
+        key="software_version", translation_key="software_version",
         icon="mdi:information-outline", entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_firmware,
     ),
     FoxESSSensorEntityDescription(
-        key="device_address", name="Device Address", translation_key="device_address",
+        key="device_address", translation_key="device_address",
         icon="mdi:identifier", entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.get("device_address"),
     ),
     FoxESSSensorEntityDescription(
-        key="id_serial_number", name="Serial Number", translation_key="id_serial_number",
+        key="id_serial_number", translation_key="id_serial_number",
         icon="mdi:card-account-details-outline", entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.get("id_serial_number"),
     ),
@@ -304,26 +304,26 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # "no reading yet" stays HA's own unknown.
     # "phase_switching" comes after the original states so they keep their
     # option positions.
-    _enum_sensor("status", "Status", "mdi:ev-station", "status", STATUS_SENSOR_MAP),
-    _enum_sensor("cp_status", "CP Status", "mdi:connection", "cp_status", CP_STATUS_MAP),
-    _enum_sensor("cc_status", "CC Status", "mdi:cable-data", "cc_status", CC_STATUS_MAP),
-    _enum_sensor("lock_status", "Lock Status", "mdi:lock", "lock_status", LOCK_STATUS_MAP),
+    _enum_sensor("status", "mdi:ev-station", "status", STATUS_SENSOR_MAP),
+    _enum_sensor("cp_status", "mdi:connection", "cp_status", CP_STATUS_MAP),
+    _enum_sensor("cc_status", "mdi:cable-data", "cc_status", CC_STATUS_MAP),
+    _enum_sensor("lock_status", "mdi:lock", "lock_status", LOCK_STATUS_MAP),
     # Read from the settings block. The entity key ("work_mode_sensor") and
     # translation key ("work_mode") differ on purpose.
-    _enum_sensor("work_mode_sensor", "Work Mode", "mdi:cog", "work_mode", WORK_MODE_MAP,
+    _enum_sensor("work_mode_sensor", "mdi:cog", "work_mode", WORK_MODE_MAP,
                  translation_key="work_mode", block=BLOCK_CONFIG),
-    _enum_sensor("phase_sequence", "Phase Sequence", "mdi:electric-switch", "phase_sequence",
+    _enum_sensor("phase_sequence", "mdi:electric-switch", "phase_sequence",
                  PHASE_SEQ_MAP, enabled=False),  # phase-switch box only
     # A plain text sensor (no options), so an unrecognised code is just empty.
     FoxESSSensorEntityDescription(
-        key="stop_reason", name="Stop Reason", translation_key="stop_reason",
+        key="stop_reason", translation_key="stop_reason",
         icon="mdi:information",
         value_fn=_decoded("stop_reason", STOP_REASON_MAP, enum=False),
     ),
     # One answer to "why is the car not charging right now?". Not tied to a
     # register block, so it can still say the charger is offline.
     FoxESSSensorEntityDescription(
-        key="charging_status_reason", name="Charging Status Reason",
+        key="charging_status_reason",
         translation_key="charging_status_reason", icon="mdi:help-circle-outline",
         device_class=SensorDeviceClass.ENUM, options=list(STATUS_REASONS),
         entity_category=EntityCategory.DIAGNOSTIC, block=None,
@@ -332,7 +332,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # Temperatures. -40..120 °C is far outside anything the electronics can
     # reach yet well inside what a corrupt register decodes to.
     FoxESSSensorEntityDescription(
-        key="port_temperature", name="Port Temperature", translation_key="port_temperature",
+        key="port_temperature", translation_key="port_temperature",
         icon="mdi:thermometer", device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -348,7 +348,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         # inside the enclosure: 23.6 °C idle vs 55.5 °C at 30 A on the same
         # unit, same afternoon. Named Internal so nobody reads it as the
         # garage temperature.
-        key="ambient_temperature", name="Internal Temperature",
+        key="ambient_temperature",
         translation_key="ambient_temperature",
         icon="mdi:thermometer", device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -360,24 +360,24 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     _voltage(1, enabled=True),
     _voltage(2, enabled=False),
     _voltage(3, enabled=False),
-    _current("l1_current", "L1 Current", "l1_current_raw"),
-    _current("l2_current", "L2 Current", "l2_current_raw", enabled=False),
-    _current("l3_current", "L3 Current", "l3_current_raw", enabled=False),
+    _current("l1_current", "l1_current_raw"),
+    _current("l2_current", "l2_current_raw", enabled=False),
+    _current("l3_current", "l3_current_raw", enabled=False),
     # Power: limited by the detected model's rating (A7300 until the model
     # has been read).
-    _power("charging_power", "Charging Power", "power_raw",
+    _power("charging_power", "power_raw",
            icon="mdi:lightning-bolt", digits=2, measured=True),
-    _power("max_supported_power", "Max Supported Power", "max_power_raw",
+    _power("max_supported_power", "max_power_raw",
            icon="mdi:lightning-bolt-outline", digits=1, measured=False),
-    _power("min_supported_power", "Min Supported Power", "min_power_raw",
+    _power("min_supported_power", "min_power_raw",
            icon="mdi:lightning-bolt-outline", digits=1, measured=False),
-    _current("max_supported_current", "Max Supported Current", "max_current_raw",
+    _current("max_supported_current", "max_current_raw",
              measured=False),
-    _current("min_supported_current", "Min Supported Current", "min_current_raw",
+    _current("min_supported_current", "min_current_raw",
              measured=False),
     # Energy counters, already filtered by the energy guard.
     FoxESSSensorEntityDescription(
-        key="current_session_energy", name="Current Session Energy",
+        key="current_session_energy",
         translation_key="current_session_energy", icon="mdi:counter",
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -385,7 +385,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         value_fn=_kwh("current_energy_raw"),
     ),
     FoxESSSensorEntityDescription(
-        key="total_energy", name="Total Energy", translation_key="total_energy",
+        key="total_energy", translation_key="total_energy",
         icon="mdi:counter", device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
@@ -394,7 +394,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # Alarm/fault registers are bitmasks; the active condition names go in
     # an attribute. All-ones sentinels are treated as unknown (None).
     FoxESSSensorEntityDescription(
-        key="alarm_code", name="Alarm Code", translation_key="alarm_code", icon="mdi:alert",
+        key="alarm_code", translation_key="alarm_code", icon="mdi:alert",
         value_fn=lambda data: None if (v := data.get("alarm_code")) == UNKNOWN_ALARM_CODE else v,
         attrs_fn=lambda data: {
             "active_alarms": (
@@ -403,7 +403,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         },
     ),
     FoxESSSensorEntityDescription(
-        key="fault_code", name="Fault Code", translation_key="fault_code",
+        key="fault_code", translation_key="fault_code",
         icon="mdi:alert-circle",
         value_fn=lambda data: None if (v := data.get("fault_code")) == UNKNOWN_FAULT_CODE else v,
         attrs_fn=lambda data: {
@@ -413,7 +413,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         },
     ),
     FoxESSSensorEntityDescription(
-        key="rfid_card", name="RFID Card", translation_key="rfid_card",
+        key="rfid_card", translation_key="rfid_card",
         icon="mdi:card-account-details",
         # Card IDs are personal; enable it to automate per card.
         entity_registry_enabled_default=False,
@@ -423,7 +423,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # tracker: the charger keeps none of this (its session counter restarts
     # and the stop reason is overwritten).
     FoxESSSensorEntityDescription(
-        key="last_session_energy", name="Last Session Energy",
+        key="last_session_energy",
         translation_key="last_session_energy", icon="mdi:history",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
@@ -433,7 +433,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         attrs_fn=lambda data: data.get("last_session") or {},
     ),
     FoxESSSensorEntityDescription(
-        key="last_session_duration", name="Last Session Duration",
+        key="last_session_duration",
         translation_key="last_session_duration", icon="mdi:timer-outline",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -446,7 +446,7 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # every reload, which the recorder would otherwise treat as a meter
     # rollover and add to the sum again.
     FoxESSSensorEntityDescription(
-        key="transport_errors", name="Transport Errors", translation_key="transport_errors",
+        key="transport_errors", translation_key="transport_errors",
         icon="mdi:lan-disconnect", entity_category=EntityCategory.DIAGNOSTIC,
         state_class=SensorStateClass.MEASUREMENT,
         block=None,  # client counters, updated whichever blocks were read

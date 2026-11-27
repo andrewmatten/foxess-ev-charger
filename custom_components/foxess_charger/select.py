@@ -5,7 +5,7 @@ which confirms the new value by reading the charger back.
 """
 from __future__ import annotations
 
-from homeassistant.components.select import SelectEntity
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -42,22 +42,20 @@ async def async_setup_entry(
 class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SelectEntity):
     """Select over one enum register.
 
-    Subclasses provide the code table (raw value -> option), the register
-    written and the observation key read back. The name is set explicitly,
-    so it is used instead of the translated name: entity IDs and names stay
-    English in every language.
+    Subclasses provide the entity description, the code table (raw value ->
+    option), the register written and the observation key read back.
     """
 
     _attr_has_entity_name = True
+    entity_description: SelectEntityDescription
     _codes: dict[int, str]
     _register: int
     _reading_key: str
+    _fallback_label: str
 
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry,
-                 unique_suffix: str, name: str) -> None:
+    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{unique_suffix}"
-        self._attr_name = name
+        self._attr_unique_id = f"{entry.entry_id}_{self.entity_description.key}"
         self._attr_options = list(self._codes.values())
         self._attr_device_info = build_device_info(entry, coordinator)
         self._raw_for_option = {option: raw for raw, option in self._codes.items()}
@@ -73,29 +71,31 @@ class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Selec
                 self._register, self._raw_for_option[option]
             )
         except ControlError as err:
+            label = self.name if getattr(self, "platform_data", None) else self._fallback_label
             raise HomeAssistantError(
-                f"FoxESS: failed to set {self.name} to {option}: {err}"
+                f"FoxESS: failed to set {label} to {option}: {err}"
             ) from err
         await self.coordinator.async_refresh()
         self.async_write_ha_state()
 
 
 class FoxESSWorkModeSelect(_EnumRegisterSelect):
-    """Controlled / Plug&Charge / Locked. The integration needs Plug&Charge.
+    """Controlled / Plug&Charge / Locked.
 
     The options keep their original display-style strings because
     automations select them by value.
     """
 
-    _attr_icon = "mdi:ev-station"
-    _attr_translation_key = "work_mode_control"
+    entity_description = SelectEntityDescription(
+        key="work_mode",
+        translation_key="work_mode_control",
+        icon="mdi:ev-station",
+    )
     _block = BLOCK_CONFIG
     _codes = WORK_MODE_SELECT_OPTIONS
     _register = REG_WORK_MODE
     _reading_key = "work_mode"
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "work_mode", "Work Mode")
+    _fallback_label = "Work Mode"
 
 
 class FoxESSPhaseSelect(_EnumRegisterSelect):
@@ -107,16 +107,20 @@ class FoxESSPhaseSelect(_EnumRegisterSelect):
     entry); the charger gives no reliable sign of the box itself.
     """
 
-    _attr_icon = "mdi:electric-switch"
-    _attr_translation_key = "phase_switching_control"
-    _attr_entity_registry_enabled_default = False
+    entity_description = SelectEntityDescription(
+        key="phase_sequence",
+        translation_key="phase_switching_control",
+        icon="mdi:electric-switch",
+        entity_registry_enabled_default=False,
+    )
     _block = BLOCK_STATUS
     _codes = PHASE_SEQ_MAP
     _register = REG_PHASE_SWITCHING
     _reading_key = "phase_sequence"
+    _fallback_label = "Phase Sequence"
 
     def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "phase_sequence", "Phase Sequence")
+        super().__init__(coordinator, entry)
         self._entry = entry
 
     @property

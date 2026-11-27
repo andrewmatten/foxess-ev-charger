@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -58,13 +58,11 @@ class _ControllerSwitch(
     """Shared plumbing: identity, and running a controller command."""
 
     _attr_has_entity_name = True
+    entity_description: SwitchEntityDescription
 
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry,
-                 unique_suffix: str, name: str) -> None:
+    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{unique_suffix}"
-        # Set explicitly, so it is used instead of the translated name.
-        self._attr_name = name
+        self._attr_unique_id = f"{entry.entry_id}_{self.entity_description.key}"
         self._attr_device_info = build_device_info(entry, coordinator)
 
     async def _async_command(self, command: Awaitable[Any], action: str) -> Any:
@@ -85,12 +83,12 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     fault latch or Stop holds output at zero, or no session is running;
     unknown while the status cannot be read."""
 
-    _attr_icon = "mdi:ev-plug-type2"
-    _attr_translation_key = "charging"
+    entity_description = SwitchEntityDescription(
+        key="charging",
+        translation_key="charging",
+        icon="mdi:ev-plug-type2",
+    )
     _block = BLOCK_STATUS
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "charging", "Charging")
 
     @property
     def is_on(self) -> bool | None:
@@ -132,12 +130,12 @@ class FoxESSChargingSwitch(_ControllerSwitch):
 class FoxESSLockSwitch(_ControllerSwitch):
     """Connector lock: on = locked (register 0x100F reads 1)."""
 
-    _attr_icon = "mdi:lock"
-    _attr_translation_key = "lock"
+    entity_description = SwitchEntityDescription(
+        key="lock",
+        translation_key="lock",
+        icon="mdi:lock",
+    )
     _block = BLOCK_STATUS
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "lock", "Lock")
 
     @property
     def is_on(self) -> bool | None:
@@ -163,13 +161,13 @@ class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
     """Automatic phase switching (0x300A): the charger's own function on
     three-phase models. The manual phase command (0x4002) is what needs the box."""
 
-    _attr_icon = "mdi:auto-fix"
-    _attr_translation_key = "auto_phase_switch"
-    _attr_entity_registry_enabled_default = False
+    entity_description = SwitchEntityDescription(
+        key="auto_phase_switch",
+        translation_key="auto_phase_switch",
+        icon="mdi:auto-fix",
+        entity_registry_enabled_default=False,
+    )
     _block = BLOCK_PHASE_BOX
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "auto_phase_switch", "Auto Phase Switch")
 
     @property
     def is_on(self) -> bool:

@@ -40,8 +40,8 @@
   },
   "issues": {
     "wrong_work_mode": {
-      "title": "Work Mode des Chargers muss Plug&Charge sein",
-      "description": "Der Work Mode des Chargers steht auf {mode}. Diese Integration funktioniert nur mit Plug&Charge: In jedem anderen Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Work Mode des Chargers auf Plug&Charge (Auswahl „Work Mode“ am Charger-Gerät)."
+      "title": "Arbeitsmodus des Chargers verhindert das Laden",
+      "description": "Der Arbeitsmodus des Chargers steht auf {mode}. In diesem Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Arbeitsmodus des Chargers auf Plug&Charge oder Gesteuert (Auswahl „Arbeitsmodus“ am Charger-Gerät)."
     },
     "needs_human": {
       "title": "Charger benötigt Ihre Aufmerksamkeit",
@@ -250,9 +250,9 @@
       "work_mode_control": {
         "name": "Arbeitsmodus",
         "state": {
-          "controlled": "Gesteuert",
-          "plug_and_charge": "Plug & Charge",
-          "locked": "Gesperrt"
+          "Controlled": "Gesteuert",
+          "Plug&Charge": "Plug & Charge",
+          "Locked": "Gesperrt"
         }
       },
       "phase_switching_control": {
