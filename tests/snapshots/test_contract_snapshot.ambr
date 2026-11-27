@@ -663,7 +663,7 @@
         'scan_interval': 10,
       }),
     }),
-    'probe_raises': 'OSError: probe blew up',
+    'probe_raises': 'no exception',
     'probes': list([
       dict({
         'args': tuple(
@@ -712,12 +712,18 @@
     'unreachable': FlowResultSnapshot({
       'data_schema': list([
         dict({
+          'description': dict({
+            'suggested_value': '192.0.2.20',
+          }),
           'name': 'host',
           'required': True,
           'type': 'string',
         }),
         dict({
           'default': 502,
+          'description': dict({
+            'suggested_value': 1502,
+          }),
           'name': 'port',
           'required': True,
           'type': 'integer',
@@ -726,6 +732,9 @@
         }),
         dict({
           'default': 1,
+          'description': dict({
+            'suggested_value': 3,
+          }),
           'name': 'slave_id',
           'required': True,
           'type': 'integer',
