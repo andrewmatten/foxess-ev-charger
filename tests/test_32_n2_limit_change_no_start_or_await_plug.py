@@ -55,7 +55,8 @@ async def test_controlled_limit_change_finishing_mid_write_never_sends_start(rig
 @pytest.mark.parametrize("work_mode", [CONTROLLED, PLUG_AND_CHARGE])
 async def test_limit_change_unplug_mid_write_never_arms_await_plug(rigs, work_mode):
     """Car unplugs between _preflight and _confirm_session: must revoke, not stage."""
-    rig = rigs(work_mode=work_mode, implicit_resume=False)
+    # Plug&Charge needs the charger's implicit resume to open the first session.
+    rig = rigs(work_mode=work_mode, implicit_resume=work_mode == PLUG_AND_CHARGE)
     ctl = await rig.boot()
     await rig.enable_at(CAP)
     assert rig.sim.state == CHARGING
