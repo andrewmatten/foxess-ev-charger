@@ -172,8 +172,14 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
                     time.monotonic() - self._offline_since,
                 )
                 self._offline_since = None
-            self.energy.apply(data, session_boundary=self.sessions.is_boundary(data))
-            self.sessions.update(data, intent_enabled=self._intent_enabled())
+            intent_enabled = self._intent_enabled()
+            self.energy.apply(
+                data,
+                session_boundary=self.sessions.is_boundary(
+                    data, intent_enabled=intent_enabled,
+                ),
+            )
+            self.sessions.update(data, intent_enabled=intent_enabled)
         else:
             self._status_failures += 1
             if self._offline_since is None:
