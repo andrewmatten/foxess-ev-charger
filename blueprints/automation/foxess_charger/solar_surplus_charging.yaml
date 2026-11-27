@@ -404,6 +404,16 @@ action:
                               entity_id: !input max_current_number
                             data:
                               value: "{{ entity_min }}"
+                      # Staging awaits a charger poll; triggers in that time
+                      # are dropped (mode single). Re-check live state first.
+                      - condition: template
+                        value_template: >
+                          {% set g = states(grid_power_sensor) %}
+                          {% set w = (g | float(0)) * (1000 if grid_power_unit == 'kW' else 1) %}
+                          {% set imp = (w * -1) if invert_grid_power_sign else w %}
+                          {{ is_number(g) and is_state(charging_switch, 'off')
+                             and state_attr(charging_switch, 'intent_enabled') != true
+                             and imp < (import_ceiling_watts - hysteresis_watts) }}
                       - action: switch.turn_on
                         continue_on_error: true
                         target:

@@ -970,6 +970,10 @@ class ChargingController:
                         power = min(cap, SAVED_POWER_RAW_MAX)
                 elif power < MIN_ENABLE_POWER_RAW:
                     power = None
+                if self._intent.revision != i.revision or not self._released:
+                    # A command (pause, limit change, enable) landed during the
+                    # reads above: it owns the wire now, never adopt over it.
+                    return False
                 self._released = False
                 if power is None:
                     return True
@@ -2000,6 +2004,10 @@ class ChargingController:
             raise ControlError(
                 "Max Charging Power is below 1.4 kW, charging cannot start"
             )
+        if self._max_power is not None and power > self._max_power:
+            # A saved limit above the device's own rating (e.g. learned only
+            # after a failed startup read) is never commanded as is.
+            power = self._max_power
         async def enable() -> CommandResult:
             # _update_positive captures ``before = self._intent`` before
             # awaiting the candidate save, and rejects the enable (re-saving
