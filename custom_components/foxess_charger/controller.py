@@ -590,7 +590,11 @@ class ChargingController:
                 revision=max(self._intent.revision, candidate.revision) + 1,
             )
             self._persisted = await self._save_intent()
-            if self._intent.safety_latched:
+            if self._intent.safety_latched and (
+                not before.safety_latched
+                or LATCH_RANK.get(self._intent.latch_cause, 2)
+                > LATCH_RANK.get(before.latch_cause, 2)
+            ):
                 raise ControlError(self._last_error or "charger fault; output latched to zero")
             raise _Superseded
         self._intent = candidate
@@ -1027,7 +1031,7 @@ class ChargingController:
         revision: int | None = None,
         enabling: bool = False,
         *,
-        restore_hard: bool = False,
+        clear_hard_power: int | None = None,
     ) -> CommandResult:
         """Apply the latest intent. A command passes the revision it created: if
         intent moved on since, the latest intent is still applied (a newer
@@ -1037,7 +1041,11 @@ class ChargingController:
             self._busy += 1
             try:
                 overtaken = revision is not None and self._intent.revision != revision
-                result = await self._apply_locked(enabling, restore_hard=restore_hard)
+                result = await self._apply_locked(
+                    enabling,
+                    clear_hard_power=clear_hard_power,
+                    overtaken=overtaken,
+                )
                 if overtaken:
                     self._counters["superseded"] += 1
                     return CommandResult("superseded", self._intent.revision)
@@ -1052,10 +1060,66 @@ class ChargingController:
                 self._busy -= 1
 
     async def _apply_locked(
-        self, enabling: bool = False, *, restore_hard: bool = False,
+        self,
+        enabling: bool = False,
+        *,
+        clear_hard_power: int | None = None,
+        overtaken: bool = False,
     ) -> CommandResult:
         intent, wire = self._intent, self._wire()
         power, current = wire
+        if clear_hard_power is not None:
+            if overtaken:
+                # Overtaken before preflight confirmed a healthy charger frame:
+                # keep the hard latch durable if it is still active.
+                if self._intent.safety_latched:
+                    self._last_error = (
+                        "hard fault latch restored: enable overtaken before charger "
+                        "confirmed healthy"
+                    )
+                    await self._latch_fault("hard")
+                else:
+                    raise _Superseded
+            else:
+                try:
+                    await self._preflight(
+                        None,
+                        self._clock() + self._start_timeout,
+                        enabling,
+                        expected_intent=intent,
+                        clearing_hard=True,
+                    )
+                    if self._intent.revision != intent.revision:
+                        raise _Superseded
+                except ControlError as err:
+                    msg = f"hard fault latch restored: {err}"
+                    self._last_error = msg
+                    await self._latch_fault("hard")
+                    await self._revoke()
+                    raise ControlError(msg) from err
+                except _Superseded:
+                    self._last_error = (
+                        "hard fault latch restored: enable overtaken before charger "
+                        "confirmed healthy"
+                    )
+                    await self._latch_fault("hard")
+                    raise
+                self._released = False
+                intent = await self._update_positive(
+                    enabled=True,
+                    power_raw=clear_hard_power,
+                    safety_latched=False,
+                    stop_fallback=False,
+                    latch_cause=None,
+                )
+                self._protect.discard(_REASON_CAP_ACK)
+                self._cap_zero_confirmed = False
+                wire = self._wire()
+                power, current = wire
+                if not (power or current):
+                    if self._explicit_zero() or intent.stop_fallback or self._released:
+                        raise _Superseded
+                    raise ControlError("protective hold active; enable not applied")
         if intent.stop_fallback:
             ok = lambda ev: (  # noqa: E731
                 ev.valid and ev.status in PAUSED_STATUS and ev.power_raw <= LOW_POWER_RAW
@@ -1083,14 +1147,7 @@ class ChargingController:
             bool(power or current)
             or (enabling and not self._explicit_zero() and not self._released)
         )
-        if restore_hard and not want_positive:
-            # Overtaken before preflight confirmed a healthy charger frame.
-            if self._worse("hard"):
-                self._last_error = (
-                    "hard fault latch restored: enable overtaken before charger confirmed healthy"
-                )
-            await self._latch_fault("hard")
-        if want_positive:
+        if clear_hard_power is None and want_positive:
             try:
                 await self._preflight(
                     wire if (power or current) else None,
@@ -1104,25 +1161,8 @@ class ChargingController:
                     if self._explicit_zero() or intent.stop_fallback or self._released:
                         raise _Superseded
                     raise ControlError("protective hold active; enable not applied")
-            except ControlError as err:
-                if restore_hard and self._worse("hard"):
-                    msg = f"hard fault latch restored: {err}"
-                    self._last_error = msg
-                    await self._latch_fault("hard")
-                    await self._revoke()
-                    raise ControlError(msg) from err
-                if restore_hard:
-                    await self._latch_fault("hard")
+            except ControlError:
                 await self._revoke()
-                raise
-            except _Superseded:
-                if restore_hard:
-                    if self._worse("hard"):
-                        self._last_error = (
-                            "hard fault latch restored: enable overtaken before charger "
-                            "confirmed healthy"
-                        )
-                    await self._latch_fault("hard")
                 raise
         self._enable_current = None
         # Only an explicit enable: later limit changes must not add a write.
@@ -1204,7 +1244,13 @@ class ChargingController:
                 "continuing with the power limit", self._max_current / 10)
 
     async def _preflight(
-        self, wire, deadline, enabling: bool = True, *, expected_intent: Intent | None = None,
+        self,
+        wire,
+        deadline,
+        enabling: bool = True,
+        *,
+        expected_intent: Intent | None = None,
+        clearing_hard: bool = False,
     ) -> None:
         """Before any positive write: a fresh valid, fault-free frame. An
         unplugged cable passes (the enable is then staged); a refusing status,
@@ -1213,7 +1259,13 @@ class ChargingController:
         complete the two-frame recovery before continuing."""
         while True:
             self._check(wire)
-            if wire is None and expected_intent is not None:
+            if clearing_hard:
+                if (
+                    expected_intent is not None
+                    and self._intent.revision != expected_intent.revision
+                ):
+                    raise _Superseded
+            elif wire is None and expected_intent is not None:
                 i = self._intent
                 if (
                     self._explicit_zero()
@@ -1225,7 +1277,21 @@ class ChargingController:
                 ):
                     raise _Superseded
             ev = await self._observe()
-            if self._intent.safety_latched or not ev.valid:
+            if clearing_hard:
+                if (
+                    expected_intent is not None
+                    and self._intent.revision != expected_intent.revision
+                ):
+                    raise _Superseded
+                if _faulted(ev.status, ev.fault_code):
+                    raise ControlError(
+                        f"charger fault (status {ev.status}, fault code {ev.fault_code})"
+                    )
+                if not ev.valid and _REASON_TELEMETRY in self._protect:
+                    raise ControlError(
+                        "charger status unreadable for the telemetry grace; enable aborted"
+                    )
+            elif self._intent.safety_latched or not ev.valid:
                 self._abort_if_unsafe()
             if ev.valid and ev.status in REFUSING_STATUS:
                 raise ControlError(f"charger refuses to charge (status {ev.status})")
@@ -1933,6 +1999,13 @@ class ChargingController:
             if self.needs_human and not clear_hard:
                 raise ControlError("charging is off after a fault that needs a person: "
                                    "turn the charging switch on yourself in Home Assistant")
+            if clear_hard:
+                # Keep the hard latch durable until _preflight confirms a
+                # healthy charger frame, so a crash/restart mid-preflight can
+                # never downgrade a hard latch to an ordinary pause.
+                return await self._run(
+                    lambda: self._op_apply(start_rev, True, clear_hard_power=power)
+                )
             self._released = False      # an explicit enable owns the wire again
             try:
                 intent = await self._update_positive(
@@ -1945,7 +2018,7 @@ class ChargingController:
             self._protect.discard(_REASON_CAP_ACK)
             self._cap_zero_confirmed = False
             return await self._run(
-                lambda: self._op_apply(intent.revision, True, restore_hard=clear_hard)
+                lambda: self._op_apply(intent.revision, True)
             )
 
         return await self._command(enable)
