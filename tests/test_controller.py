@@ -943,6 +943,7 @@ async def _poll_twice(c, io, gap=1.0):
 
 async def test_confirmed_unplug_releases_pause_for_a_new_external_session():
     c, io = await make(saved(enabled=False, power=50), charging=False)
+    io.regs[0x3000] = 1              # Plug&Charge work mode
     io.regs[CC] = 0
     await _poll_twice(c, io)
     io.writes.clear()
@@ -956,6 +957,7 @@ async def test_confirmed_unplug_releases_pause_for_a_new_external_session():
 
 async def test_unplug_releases_a_stop_fallback_like_a_pause():
     c, io = await make(saved(enabled=False, power=50, stop_fallback=True), charging=False)
+    io.regs[0x3000] = 1              # Plug&Charge work mode
     assert c.phase == "stopped"
     io.regs[CC] = 0
     await _poll_twice(c, io)

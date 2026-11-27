@@ -84,6 +84,7 @@ SAFETY_FALLBACK_CURRENT_RAW = 60   # 6 A
 START_COMMAND = 1
 STOP_COMMAND = 2
 CONTROLLED_MODE = 0                # Work Mode (0x3000) in which Start may be needed
+PLUG_AND_CHARGE_MODE = 1           # Work Mode (0x3000) where charger opens sessions itself
 # Controlled mode: while an enable waits for its session, Start is re-sent at
 # most this often (a refused or lost Start is retried, never compensated).
 START_RETRY_S = 15.0
@@ -798,12 +799,38 @@ class ChargingController:
         if self._released:
             if not (ev.valid and ev.cc_status == 1):
                 return False
-            if self._work_mode == CONTROLLED_MODE:
+            if self._work_mode is None:
+                regs = await self._read(REG_WORK_MODE)
+                if regs is not None and regs[0] in WORK_MODE_MAP:
+                    self._work_mode = regs[0]
+            if self._work_mode != PLUG_AND_CHARGE_MODE:
                 self._released = False
                 return True
             if ev.status in SESSION_STATUS:
+                power = i.power_raw
+                if power is None:
+                    if self._max_power is None:
+                        regs = await self._read(REG_MAX_POWER)
+                        if regs is not None and MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW:
+                            self._max_power = regs[0]
+                    live = await self._read(REG_MAX_CHARGING_POWER)
+                    cap = live[0] if live is not None else None
+                    limit_hi = self._max_power if self._max_power is not None else MAX_POWER_RAW
+                    if _is_int(cap) and cap < MIN_ENABLE_POWER_RAW:
+                        power = None
+                    elif _is_int(cap) and MIN_ENABLE_POWER_RAW <= cap <= limit_hi:
+                        power = cap
+                    elif self._max_power is not None:
+                        power = self._max_power
+                elif power < MIN_ENABLE_POWER_RAW:
+                    power = None
                 self._released = False
-                await self._update(enabled=True)
+                if power is None:
+                    return True
+                try:
+                    await self._update_positive(enabled=True, power_raw=power)
+                except ControlError:
+                    return True
                 self._spawn(self._op_apply)
             return False
         if ev.valid and ev.cc_status == 0:
@@ -890,7 +917,7 @@ class ChargingController:
             if ev.drawing:
                 await self._stop_sequence()
             return CommandResult("confirmed", intent.revision, None)
-        if power:
+        if power or current:
             try:
                 await self._preflight(wire, self._clock() + self._start_timeout, enabling)
             except ControlError:
@@ -924,7 +951,7 @@ class ChargingController:
             if await self._await_evidence(ok, wire, pause_deadline) is None:
                 await self._stop_sequence()
                 return CommandResult("confirmed", self._intent.revision, None)
-        elif power:     # None = nothing written: never confirm (or Start) a session
+        elif power or current:     # None = nothing written: never confirm (or Start) a session
             try:
                 started = await self._confirm_session(
                     wire, self._clock() + self._start_timeout, enabling
@@ -1232,12 +1259,13 @@ class ChargingController:
             if self._explicit_zero() or self._intent.stop_fallback:
                 self._cap_at = None
             # The positive cap in force is relied on (written or held), not zeroed.
-            capped = bool(power) and (not ev.valid or self._session_active(ev))
-            if power and self._session_active(ev):
+            positive = bool(power or current)
+            capped = positive and (not ev.valid or self._session_active(ev))
+            if positive and self._session_active(ev):
                 # A fresh valid active-session observation authorizes the
                 # latest revision for background refresh.
                 self._authorized = (power, current, self._intent.revision)
-            elif power and not ev.valid:
+            elif positive and not ev.valid:
                 # Inside the telemetry grace: hold. Re-sending even the last
                 # authorized cap would restart a session that finished
                 # unobserved (firmware 1.8), and a staged revision was never
@@ -1245,7 +1273,7 @@ class ChargingController:
                 # zero follows if the outage persists or CAP_ACK_LIMIT_S passes
                 # without an acknowledged cap write.
                 wire, power, current, held = None, None, None, True
-            elif power:
+            elif positive:
                 # Valid but no active session: zero, never positive.
                 wire, power, current = None, 0, None
             elif (
@@ -1265,7 +1293,7 @@ class ChargingController:
                 if self._hold_since is None:
                     self._hold_since = self._clock()
                 wire, power, current, held = None, None, None, True
-            if not power:
+            if not (power or current):
                 self._authorized = None
             seen = mismatched = lost = False
             try:
@@ -1537,7 +1565,7 @@ class ChargingController:
         Otherwise it is staged, and an observed finish revokes the enable."""
         intent = await self._update_positive(**changes)
         if intent.enabled and not (intent.stop_fallback or intent.safety_latched):
-            if self._wire()[0] and not await self._run(self._op_observe):
+            if any(self._wire()) and not await self._run(self._op_observe):
                 intent = self._intent
                 if intent.safety_latched:
                     raise ControlError(self._last_error or "charger fault; output latched to zero")
