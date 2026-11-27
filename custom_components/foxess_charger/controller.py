@@ -854,7 +854,11 @@ class ChargingController:
         goes back on the wire now) and only an explicit enable charges.
         """
         i = self._intent
-        user_pause = self._explicit_zero() and not i.safety_latched
+        user_pause = (
+            self._explicit_zero()
+            and not i.safety_latched
+            and _REASON_SAFETY not in self._protect
+        )
         if not user_pause or not self._initialized:
             self._released, self._unplug_first = False, None
             return False
@@ -1300,14 +1304,14 @@ class ChargingController:
         caller passing `self._clock()` still gets exactly one attempt per
         register, no retries).
         """
-        self._next_safety_try = self._clock() + self._refresh_interval()
         self._last_refusal = None
+        target_validity = self._user_safety.get(REG_TIME_VALIDITY, SAFETY_VALIDITY_S)
         try:
             try:
                 await self._write_confirmed(
-                    REG_TIME_VALIDITY,
-                    self._user_safety.get(REG_TIME_VALIDITY, SAFETY_VALIDITY_S), None,
+                    REG_TIME_VALIDITY, target_validity, None,
                     min(deadline, self._clock() + self._timeout))
+                self._set_validity(target_validity)
             except ControlError:
                 if not await self._accept_fixed_validity():
                     raise
@@ -1316,6 +1320,7 @@ class ChargingController:
                 self._user_safety.get(REG_DEFAULT_CURRENT, SAFETY_FALLBACK_CURRENT_RAW),
                 None, min(deadline, self._clock() + self._timeout))
         except ControlError as err:
+            self._next_safety_try = self._clock() + self._refresh_interval()
             self._last_error = f"safety configuration: {err}"
             _LOGGER.error("Safety configuration unconfirmed; enable blocked, will retry")
             return
@@ -1562,6 +1567,8 @@ class ChargingController:
 
     # ── public API ───────────────────────────────────────────────────────
     async def async_initialize(self, saved: dict | None = None, *, configure_safety: bool = True) -> None:
+        if configure_safety:
+            self._protect.add(_REASON_SAFETY)
         if saved is None:
             # First install: authorize only a session the hardware shows is active.
             ev = await self._read_status()
@@ -1603,12 +1610,23 @@ class ChargingController:
                     # the hardware contradicts the saved enable, so stay paused
                     # until an explicit enable.
                     cap = await self._read(REG_MAX_CHARGING_POWER)
-                    if cap is not None and cap[0] == 0:
+                    if cap is None:
+                        self._last_error = (
+                            "restored enabled intent but charger power cap unreadable; paused"
+                        )
+                        _LOGGER.warning(self._last_error)
+                        self._intent = replace(self._intent, enabled=False)
+                    elif cap[0] == 0:
                         self._last_error = "restored enabled intent but charger holds a zero cap; paused"
                         _LOGGER.warning(self._last_error)
                         self._intent = replace(self._intent, enabled=False)
+                    elif not (MIN_ENABLE_POWER_RAW <= cap[0] <= MAX_POWER_RAW):
+                        self._last_error = (
+                            f"restored enabled intent but charger power cap {cap[0]} is invalid; paused"
+                        )
+                        _LOGGER.warning(self._last_error)
+                        self._intent = replace(self._intent, enabled=False)
         if configure_safety:
-            self._protect.add(_REASON_SAFETY)
             async with self._lock:
                 # Two registers, each wanting its own confirmation_timeout
                 # window (see _configure_safety) - the outer ceiling passed
