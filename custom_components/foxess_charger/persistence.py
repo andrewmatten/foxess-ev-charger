@@ -433,14 +433,68 @@ class ChargerStorage:
 
     # ── saving ───────────────────────────────────────────────────────────
 
-    def _legacy_session_payload(self) -> dict:
-        c = self._controller
+    @classmethod
+    def _latch_rank(cls, controller: dict) -> int:
+        if not controller.get("safety_latched"):
+            return -1
+        if cls._is_hard_latch(controller):
+            return 3
+        return {"comms": 0, "fault": 1, "stop_failed": 2}.get(
+            controller.get("latch_cause"), 3
+        )
+
+    @classmethod
+    def _is_more_protective(cls, candidate: dict, previous: dict | None) -> bool:
+        """True if ``candidate`` adds pause/latch protection over ``previous``
+        without relaxing any protective flag."""
+        cand_paused = (
+            not candidate["enabled"]
+            or candidate["safety_latched"]
+            or candidate["stop_fallback"]
+        )
+        if previous is None:
+            return cand_paused
+        prev_rank, cand_rank = cls._latch_rank(previous), cls._latch_rank(candidate)
+        if cand_rank < prev_rank:
+            return False
+        if previous["stop_fallback"] and not candidate["stop_fallback"]:
+            return False
+        if not previous["enabled"] and candidate["enabled"]:
+            return False
+        return (
+            cand_rank > prev_rank
+            or (candidate["stop_fallback"] and not previous["stop_fallback"])
+            or (previous["enabled"] and not candidate["enabled"])
+        )
+
+    def _effective_controller(self) -> tuple[dict | None, bool]:
+        """Controller state to persist, hardened if a newer save never landed."""
+        controller = dict(self._controller) if self._controller is not None else None
+        cur_rev = controller["revision"] if controller is not None else -1
+        stale = self._attempted.get(self._entry_id, -1) > cur_rev
+        if controller is not None and stale:
+            controller["enabled"] = False
+            if (
+                self._is_hard_latch(controller)
+                or self._attempted_hard.get(self._entry_id)
+            ):
+                controller["safety_latched"] = True
+                controller["latch_cause"] = "hard"
+                controller["comms_latch"] = False
+        return controller, stale
+
+    def _legacy_session_payload(
+        self, controller: dict | None = None, *, force_paused: bool = False,
+    ) -> dict:
+        c = self._controller if controller is None else controller
         # A fault latch or Stop fallback leaves `enabled` set but must not
         # charge, so it is projected as paused too. The legacy files are
         # written first, so this also protects a restart after the new state
         # file failed to save (the fingerprint mismatch imports this view).
-        paused = c is not None and (
-            not c["enabled"] or c["safety_latched"] or c["stop_fallback"]
+        paused = force_paused or (
+            c is not None and (
+                not c["enabled"] or c["safety_latched"] or c["stop_fallback"]
+            )
         )
         payload = dict(self._session_fields)
         # 2.4.3 reads stop_pending as "a Stop is outstanding" and keeps
@@ -450,14 +504,15 @@ class ChargerStorage:
         payload["stop_pending"] = paused
         return payload
 
-    def _legacy_setpoints_payload(self) -> dict | None:
-        if self._controller is None:
+    def _legacy_setpoints_payload(self, controller: dict | None = None) -> dict | None:
+        c = self._controller if controller is None else controller
+        if c is None:
             return None
         desired = {}
-        if self._controller.get("current_raw") is not None:
-            desired[str(REG_MAX_CHARGING_CURRENT)] = self._controller["current_raw"]
-        if self._controller.get("power_raw") is not None:
-            desired[str(REG_MAX_CHARGING_POWER)] = self._controller["power_raw"]
+        if c.get("current_raw") is not None:
+            desired[str(REG_MAX_CHARGING_CURRENT)] = c["current_raw"]
+        if c.get("power_raw") is not None:
+            desired[str(REG_MAX_CHARGING_POWER)] = c["power_raw"]
         return {"desired_setpoints": desired}
 
     async def _save(self, name: str, store: Store, payload: Any) -> None:
@@ -472,9 +527,11 @@ class ChargerStorage:
         # projection instead of an older controller state. Caller holds
         # self._write_lock so concurrent controller and session saves cannot
         # interleave and leave a mismatched legacy_fingerprint on disk.
-        session = self._legacy_session_payload()
-        setpoints = self._legacy_setpoints_payload()
-        controller = dict(self._controller) if self._controller is not None else None
+        controller, stale = self._effective_controller()
+        session = self._legacy_session_payload(
+            controller, force_paused=stale and controller is None,
+        )
+        setpoints = self._legacy_setpoints_payload(controller)
         session_extra = dict(self._session_extra)
         await self._save("session", self._session_store, session)
         await self._save("setpoints", self._setpoints_store, setpoints)
@@ -511,9 +568,13 @@ class ChargerStorage:
             try:
                 await self._async_write_locked()
             except BaseException:
-                self._controller = previous
+                if not self._is_more_protective(self._controller, previous):
+                    self._controller = previous
                 raise
-            if not self._is_hard_latch(self._controller):
+            if (
+                not self._is_hard_latch(self._controller)
+                and self._attempted.get(self._entry_id, -1) <= self._controller["revision"]
+            ):
                 self._attempted_hard.pop(self._entry_id, None)
 
     async def async_save_session(self, fields: dict, *, rearm_required: bool) -> None:
