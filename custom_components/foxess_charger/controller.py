@@ -1304,17 +1304,28 @@ class ChargingController:
         caller passing `self._clock()` still gets exactly one attempt per
         register, no retries).
         """
-        self._last_refusal = None
         target_validity = self._user_safety.get(REG_TIME_VALIDITY, SAFETY_VALIDITY_S)
         try:
-            try:
-                await self._write_confirmed(
-                    REG_TIME_VALIDITY, target_validity, None,
-                    min(deadline, self._clock() + self._timeout))
-                self._set_validity(target_validity)
-            except ControlError:
-                if not await self._accept_fixed_validity():
-                    raise
+            validity_deadline = min(deadline, self._clock() + self._timeout)
+            while True:
+                self._last_refusal = None
+                if await self._write_once(REG_TIME_VALIDITY, target_validity, None):
+                    self._set_validity(target_validity)
+                    break
+                if self._last_refusal == (REG_TIME_VALIDITY, MODBUS_ILLEGAL_DATA_VALUE):
+                    if await self._accept_fixed_validity():
+                        break
+                    raise ControlError(
+                        f"0x{REG_TIME_VALIDITY:04X}={target_validity} refused "
+                        f"(Modbus exception {MODBUS_ILLEGAL_DATA_VALUE})"
+                    )
+                if self._clock() >= validity_deadline:
+                    raise ControlError(
+                        f"0x{REG_TIME_VALIDITY:04X}={target_validity} not confirmed by read-back"
+                    )
+                await self._sleep(
+                    min(self._retry, max(0.0, validity_deadline - self._clock()))
+                )
             await self._write_confirmed(
                 REG_DEFAULT_CURRENT,
                 self._user_safety.get(REG_DEFAULT_CURRENT, SAFETY_FALLBACK_CURRENT_RAW),
