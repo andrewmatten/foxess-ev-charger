@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.2.0-beta.1 - unreleased
+
+Big review release: two independent deep-dive reviews, a council review and the backlog from the 3.1.3 review, all fixed with regression tests.
+
+**Charging safety**
+- A limit change can no longer send Start or arm "start on plug-in" if the car finishes or unplugs mid-write; only an explicit turn-on can.
+- Turning charging on before plugging in is no longer cancelled by a poll that lands at the moment of plug-in.
+- If no power-limit write has been acknowledged for 45 s, the protective zero now goes out in the same refresh and a healthy reading can no longer cancel it. The guard times now scale down with a shorter Command Time Validity.
+- The current limit (0x3001) refresh is now retried like the power limit; a charger that ignores it is flagged, not stopped.
+- A turn-on or limit increase is saved before it is applied; if the save fails it is not applied and cannot come back after a restart. A failed save of a lower limit keeps the lower limit.
+- A hard fault latch is kept when a person's turn-on fails (charger offline) and survives failed or partial saves.
+- Setup fails closed: no power limit is written before the fallback settings are confirmed, and an unreadable limit is not treated as allowed.
+- Plug&Charge: a session started by the charger after a replug is adopted only when Work Mode is known to be Plug&Charge, with a real power limit, so a restart no longer stops it.
+- Work Mode can only be changed while the charger shows no car connected (an unreadable cable state now refuses).
+- Turning charging on with Max Charging Power below 1.4 kW now gives an error instead of silently staying paused.
+- Storage writes are serialised, so two saves at once can no longer lose a pause or latch on restart. A 22 kW charger reporting slightly over 22.0 kW can be saved.
+- Pause confirmation after a Stop needs valid readings. A poll on a bad link holds the controller for at most ~9 s (was ~22 s).
+- Command Time Validity / Default Current you set are also kept when storage has to be repaired; a restored validity outside 10-255 s is ignored. Chargers that refuse 0x3005 writes start ~10 s faster.
+
+**Solar surplus blueprint**
+- No longer turns charging on while the car is away or finished, and disarms a pending turn-on as soon as the car is gone (previously the car could start at full current on a night plug-in).
+- A refused turn-on is retried at most once a minute; starts from the minimum current; steps down to the minimum before stopping; filters its entity pickers to this integration; handles an unavailable current entity.
+
+**Entities and Home Assistant**
+- Unknown fault/alarm readings (0xFFFF) no longer turn on Fault/Alarm or fire their device triggers.
+- Status and CC Status show "Unrecognized" for unknown codes. Firmware and board temperature show unknown instead of wrong values for missing readings.
+- Charging Status Reason: new reasons for an unreadable status, fallback settings not confirmed (often the charger is in FoxCloud read-only mode), charger locked, and below the 1.4 kW minimum; phase switching counts as charging. The charging switch reads off below the 1.4 kW minimum.
+- A person's turn-on clears a hard latch only if the switch was already showing it.
+- Settings and diagnostic entities are now in the Configuration and Diagnostic sections of the device page (entity IDs unchanged).
+- German entity names, Work Mode options and the Work Mode repair text are now translated; device triggers have readable names.
+- Default Current's maximum follows the model (16 A on 11 kW models).
+- The device page shows firmware version and serial number, updated once the charger reports them.
+- Reconfigure: change the charger's IP address, port or unit ID without removing the integration. Setup strips spaces from the host and keeps your entries after an error.
+- Deleting the integration removes its stored files. The "confirmed" attribute on the limit numbers reflects what the charger holds.
+- Session energy no longer rejects the counter reset when charging resumes after a pause.
+- Requires Home Assistant 2024.12 or newer.
+
 ## 3.1.4 - 2026-11-27
 
 - Changed (HACS review): Command Time Validity (0x3005) and Default Current (0x3006) that you set through their number entities are now saved and written again on every setup. Before, each Home Assistant start or integration reload put them back to 60 s and 6 A. Those defaults are still written when you never set a value. See *Fallback settings* in the README.
