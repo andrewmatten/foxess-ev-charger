@@ -1805,6 +1805,10 @@ class ChargingController:
             self.data = snap
             if snap.get("work_mode") in WORK_MODE_MAP:
                 self._work_mode = snap["work_mode"]
+            if self._max_power is None:
+                max_power = snap.get("max_power_raw")
+                if _is_int(max_power) and MIN_ENABLE_POWER_RAW <= max_power <= MAX_POWER_RAW:
+                    self._max_power = max_power
             ev = _Evidence(
                 snap.get("status") if snap.get("status_valid", True) else None,
                 snap.get("cc_status") if snap.get("cc_status_valid", True) else None,
@@ -1902,6 +1906,8 @@ class ChargingController:
             if regs is None or not (MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW):
                 raise ControlError("no saved power and device maximum unreadable")
             power = regs[0]
+            if self._max_power is None:
+                self._max_power = power
         elif power < MIN_ENABLE_POWER_RAW:
             raise ControlError(
                 "Max Charging Power is below 1.4 kW, charging cannot start"
