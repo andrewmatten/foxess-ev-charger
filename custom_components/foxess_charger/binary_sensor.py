@@ -77,6 +77,14 @@ def _unlocked(data: Observation) -> bool | None:
     return lock == 0
 
 
+def _auto_phase_switch(data: Observation) -> bool | None:
+    """On when automatic phase switching reads 1; unknown outside 0/1."""
+    val = data.get("auto_phase_switch")
+    if val not in (0, 1) or isinstance(val, bool):
+        return None
+    return val == 1
+
+
 BINARY_SENSORS: tuple[FoxESSBinarySensorEntityDescription, ...] = (
     FoxESSBinarySensorEntityDescription(
         key="is_charging", translation_key="is_charging",
@@ -110,7 +118,7 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorEntityDescription, ...] = (
         icon="mdi:auto-fix",
         entity_registry_enabled_default=False,  # three-phase models only
         block=BLOCK_PHASE_BOX,
-        value_fn=lambda data: data.get("auto_phase_switch") == 1,
+        value_fn=_auto_phase_switch,
     ),
 )
 

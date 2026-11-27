@@ -170,8 +170,11 @@ class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
     _block = BLOCK_PHASE_BOX
 
     @property
-    def is_on(self) -> bool:
-        return (self.coordinator.data or {}).get("auto_phase_switch") == 1
+    def is_on(self) -> bool | None:
+        val = (self.coordinator.data or {}).get("auto_phase_switch")
+        if val not in (0, 1) or isinstance(val, bool):
+            return None
+        return val == 1
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_command(

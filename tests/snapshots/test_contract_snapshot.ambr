@@ -35,11 +35,11 @@
         'fault': False,
         'fault_status_only': False,
         'idle': False,
-        'missing_keys': False,
-        'none_values': False,
+        'missing_keys': None,
+        'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': False,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -14512,11 +14512,11 @@
         }),
         'empty/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'empty/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'fault/intent_enabled=False': dict({
           'attributes': None,
@@ -14544,19 +14544,19 @@
         }),
         'missing_keys/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'missing_keys/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'none_values/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'none_values/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'paused_by_vehicle/intent_enabled=False': dict({
           'attributes': None,
@@ -14576,11 +14576,11 @@
         }),
         'sentinels/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'sentinels/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'three_phase_a011/intent_enabled=False': dict({
           'attributes': None,
