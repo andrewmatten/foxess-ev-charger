@@ -1062,16 +1062,31 @@ class ChargingController:
                 if self._clock() >= deadline:
                     raise ControlError("charger status unreadable; pause not confirmed")
                 await self._sleep(POLL_STEP_S)
-        if restore_hard and not (power or current):
+        want_positive = (
+            bool(power or current)
+            or (enabling and not self._explicit_zero() and not self._released)
+        )
+        if restore_hard and not want_positive:
             # Overtaken before preflight confirmed a healthy charger frame.
             if self._worse("hard"):
                 self._last_error = (
                     "hard fault latch restored: enable overtaken before charger confirmed healthy"
                 )
             await self._latch_fault("hard")
-        if power or current:
+        if want_positive:
             try:
-                await self._preflight(wire, self._clock() + self._start_timeout, enabling)
+                await self._preflight(
+                    wire if (power or current) else None,
+                    self._clock() + self._start_timeout,
+                    enabling,
+                    expected_intent=intent,
+                )
+                intent, wire = self._intent, self._wire()
+                power, current = wire
+                if not (power or current):
+                    if self._explicit_zero() or intent.stop_fallback or self._released:
+                        raise _Superseded
+                    raise ControlError("protective hold active; enable not applied")
             except ControlError as err:
                 if restore_hard and self._worse("hard"):
                     msg = f"hard fault latch restored: {err}"
@@ -1171,21 +1186,37 @@ class ChargingController:
                 "FoxESS current limit %.1f A not confirmed by read-back; "
                 "continuing with the power limit", self._max_current / 10)
 
-    async def _preflight(self, wire, deadline, enabling: bool = True) -> None:
+    async def _preflight(
+        self, wire, deadline, enabling: bool = True, *, expected_intent: Intent | None = None,
+    ) -> None:
         """Before any positive write: a fresh valid, fault-free frame. An
         unplugged cable passes (the enable is then staged); a refusing status,
-        a fault, or no valid frame within the telemetry grace raises."""
+        a fault, or no valid frame within the telemetry grace raises. When
+        telemetry protection is already active on entry, valid frames may
+        complete the two-frame recovery before continuing."""
         while True:
             self._check(wire)
+            if wire is None and expected_intent is not None:
+                i = self._intent
+                if (
+                    self._explicit_zero()
+                    or i.stop_fallback
+                    or self._released
+                    or (i.power_raw, i.current_raw) != (
+                        expected_intent.power_raw, expected_intent.current_raw
+                    )
+                ):
+                    raise _Superseded
             ev = await self._observe()
-            self._abort_if_unsafe()
+            if self._intent.safety_latched or not ev.valid:
+                self._abort_if_unsafe()
             if ev.valid and ev.status in REFUSING_STATUS:
                 raise ControlError(f"charger refuses to charge (status {ev.status})")
             # A limit change is not an enable: a positive write to a finished
             # session can reopen it, so it needs the session still active.
             if ev.valid and not enabling and not self._session_active(ev):
                 raise ControlError("charging session ended; limit change not applied")
-            if ev.valid:
+            if ev.valid and _REASON_TELEMETRY not in self._protect:
                 return
             if self._clock() >= deadline:
                 raise ControlError("no valid charger status; enable not applied")
