@@ -1696,12 +1696,17 @@ class ChargingController:
             if address == REG_WORK_MODE:
                 # Protocol document V1.06, 2.36: the register only takes
                 # effect while no car is connected. Writing it with a car
-                # plugged in leaves the mode in doubt, so it is refused.
+                # plugged in (or when cable state is unreadable) leaves the
+                # mode in doubt, so require a valid unplugged frame.
                 ev = await self._read_status()
-                if ev.cc_status == 1:
+                if not ev.valid or ev.cc_status != 0:
+                    if ev.cc_status == 1:
+                        raise ControlError(
+                            "Work Mode can only be changed while no car is connected; "
+                            "unplug the car and try again")
                     raise ControlError(
                         "Work Mode can only be changed while no car is connected; "
-                        "unplug the car and try again")
+                        "cable state could not be confirmed")
             deadline = self._clock() + self._timeout
             proof = WRITE_ONLY_CONFIRMATION.get(address)
             if proof is None:
@@ -1718,6 +1723,8 @@ class ChargingController:
                     if self._clock() >= deadline:
                         raise ControlError(f"0x{address:04X}={value} not confirmed")
                     await self._sleep(min(self._retry, max(0.0, deadline - self._clock())))
+            if address == REG_WORK_MODE:
+                self._work_mode = value
             if address == REG_TIME_VALIDITY:
                 self._set_validity(value)
             if address in (REG_TIME_VALIDITY, REG_DEFAULT_CURRENT):
