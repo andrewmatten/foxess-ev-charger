@@ -69,6 +69,8 @@ class FoxESSChargerConfigFlow(ConfigFlow, domain=DOMAIN):
             slave_id = user_input[CONF_SLAVE_ID]
             await self.async_set_unique_id(f"{host}-{slave_id}")
             self._abort_if_unique_id_configured()
+            if self._address_in_use(host, slave_id):
+                return self.async_abort(reason="already_configured")
             errors = await self._async_connection_errors(host, port, slave_id)
             if not errors:
                 return self.async_create_entry(
@@ -97,6 +99,9 @@ class FoxESSChargerConfigFlow(ConfigFlow, domain=DOMAIN):
             host = user_input[CONF_HOST]
             port = user_input[CONF_PORT]
             slave_id = user_input[CONF_SLAVE_ID]
+            # Two entries on one charger would be two writers.
+            if self._address_in_use(host, slave_id, exclude=entry.entry_id):
+                return self.async_abort(reason="already_configured")
             errors = await self._async_connection_errors(host, port, slave_id)
             if not errors:
                 return self.async_update_reload_and_abort(
@@ -114,6 +119,16 @@ class FoxESSChargerConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONNECTION_SCHEMA, user_input if user_input is not None else dict(entry.data)
             ),
             errors=errors,
+        )
+
+    def _address_in_use(self, host: str, slave_id: int, exclude: str | None = None) -> bool:
+        """True if another entry already talks to this charger (its current
+        address, which a reconfigure may have moved away from its unique_id)."""
+        return any(
+            e.entry_id != exclude
+            and str(e.data.get(CONF_HOST, "")).strip().lower() == host.lower()
+            and e.data.get(CONF_SLAVE_ID) == slave_id
+            for e in self._async_current_entries(include_ignore=False)
         )
 
     async def _async_connection_errors(

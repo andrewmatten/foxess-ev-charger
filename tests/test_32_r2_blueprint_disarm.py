@@ -71,3 +71,45 @@ def test_refused_turn_on_is_throttled():
                 assert hold["then"][0]["delay"]["seconds"] >= 60
                 return
     raise AssertionError("no switch.turn_on step found")
+
+
+async def test_unknown_switch_is_not_disarmed(hass, install_blueprint):  # noqa: F811
+    """R3: a switch reading unknown (one bad status poll) is not a stopped
+    session; only a switch that reads off with the car gone is disarmed."""
+    h = Harness(hass)
+    await h.async_register()
+    with freeze_time(T0) as frozen:
+        h.set_connected(False)
+        h.set_number(16)
+        h.set_switch("unknown", intent_enabled=True)
+        h.set_grid(100)
+        await hass.async_block_till_done()
+        await _setup(hass)
+        frozen.move_to(T0 + timedelta(seconds=30))
+        h.set_grid(110)
+        await hass.async_block_till_done()
+    assert h.turn_offs == 0
+
+
+async def test_no_restart_within_the_dwell_after_a_stop(hass, install_blueprint):  # noqa: F811
+    """R3: after the switch turned off, surplus does not restart it before
+    the dwell has passed (no contactor chatter around the 6 A threshold)."""
+    h = Harness(hass)
+    await h.async_register()
+    with freeze_time(T0) as frozen:
+        h.set_connected(True)
+        h.set_number(6)
+        h.set_grid(100)
+        await hass.async_block_till_done()
+        frozen.move_to(T0 + timedelta(minutes=10))     # number unchanged for 10 min
+        h.set_switch("off", intent_enabled=False)       # just stopped
+        await hass.async_block_till_done()
+        await _setup(hass)
+        frozen.move_to(T0 + timedelta(minutes=10, seconds=20))
+        h.set_grid(-1000)
+        await hass.async_block_till_done()
+        assert h.turn_ons == 0
+        frozen.move_to(T0 + timedelta(minutes=12, seconds=30))
+        h.set_grid(-1001)
+        await hass.async_block_till_done()
+    assert h.turn_ons == 1

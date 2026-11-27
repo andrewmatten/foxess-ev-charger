@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_HOST, DOMAIN, get_capabilities
 from .coordinator import TRANSPORT_COUNTERS
+from .protocol import format_firmware_version
 
 # CONF_HOST: the charger's LAN IP - not useful for remote troubleshooting
 # and not something to hand out in a shared diagnostics download.
@@ -54,7 +55,7 @@ async def async_get_config_entry_diagnostics(
             "options": dict(entry.options),
         },
         "model": model,
-        "firmware_version": coordinator_data.get("software_version"),
+        "firmware_version": format_firmware_version(coordinator_data.get("software_version")),
         "detected_capabilities": get_capabilities(model),
         "block_health": coordinator.block_health_snapshot(),
         "transport_counters": {

@@ -215,7 +215,8 @@ variables:
     {% else %}
       {% set ok = false %}
     {% endif %}
-    {% if ok and ns.status is not none %}
+    {% if ok and ns.status is not none
+        and states(ns.status) not in ['unknown', 'unavailable'] %}
       {% set ok = states(ns.status) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
     {% endif %}
     {{ ok }}
@@ -241,7 +242,7 @@ action:
           - if:
               - condition: template
                 value_template: >
-                  {{ is_state(charging_switch, 'on') or intent_enabled }}
+                  {{ not is_state(charging_switch, 'off') or intent_enabled }}
             then:
               - action: switch.turn_off
                 target:
@@ -254,7 +255,7 @@ action:
       - conditions:
           - condition: template
             value_template: >
-              {{ intent_enabled and not is_state(charging_switch, 'on')
+              {{ intent_enabled and is_state(charging_switch, 'off')
                  and not car_connected }}
         sequence:
           - action: switch.turn_off
@@ -273,7 +274,6 @@ action:
                states[max_current_number].last_changed is none or
                (now() - states[max_current_number].last_changed).total_seconds() >= min_adjustment_seconds
              ) and (
-               is_state(charging_switch, 'off') or
                states[charging_switch] is none or
                states[charging_switch].last_changed is none or
                (now() - states[charging_switch].last_changed).total_seconds() >= min_adjustment_seconds
@@ -317,7 +317,7 @@ action:
             sequence:
               - choose:
                   - conditions:
-                      - "{{ not switch_is_off }}"
+                      - "{{ is_state(charging_switch, 'on') }}"
                     sequence:
                       - if:
                           - "{{ current_amps < entity_max }}"

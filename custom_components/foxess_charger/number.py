@@ -53,6 +53,9 @@ _LOGGER = logging.getLogger(__name__)
 INTENT_POWER = "power"
 INTENT_CURRENT = "current"
 
+# Controller phases in which output is held at zero whatever the limits say.
+_HELD_OFF = ("faulted", "stopped", "uncertain", "paused", "paused_below_minimum")
+
 NO_LIMIT = 0xFFFF  # what the session limit registers hold when no limit is set
 
 
@@ -235,10 +238,11 @@ class FoxESSNumber(
             "desired": self._native_or_none(intended),
             "observed": self._native_or_none(reported),
             "last_outcome": self._last_outcome,
-            # Charging is on and the charger holds exactly the saved value,
+            # Charging is on (not held at zero) and the charger holds the saved value,
             # whichever command (this entity, a turn-on, a restart) put it there.
             "confirmed": (
                 bool(getattr(self.coordinator.controller, "intent_enabled", False))
+                and getattr(self.coordinator.controller, "phase", None) not in _HELD_OFF
                 and intended is not None and intended == reported
             ),
         }

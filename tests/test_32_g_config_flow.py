@@ -236,3 +236,28 @@ async def test_options_flow_works_without_constructor(hass, enable_custom_integr
     assert dict(entry.options) == {"scan_interval": 25, "phase_box_fitted": True}
     again = await hass.config_entries.options.async_init(entry.entry_id)
     assert _defaults(again) == {"scan_interval": 25, "phase_box_fitted": True}
+
+
+async def test_reconfigure_and_add_refuse_an_address_another_entry_uses(
+    hass, enable_custom_integrations
+):
+    """R3: two entries on one charger would be two writers."""
+    a = MockConfigEntry(domain=DOMAIN, unique_id="192.0.2.10-1", title="A",
+                        data={CONF_HOST: "192.0.2.10", CONF_PORT: 502, CONF_SLAVE_ID: 1})
+    b = MockConfigEntry(domain=DOMAIN, unique_id="192.0.2.30-1", title="B",
+                        data={CONF_HOST: "192.0.2.30", CONF_PORT: 502, CONF_SLAVE_ID: 1})
+    a.add_to_hass(hass)
+    b.add_to_hass(hass)
+    # Reconfiguring B onto A's address is refused, B unchanged.
+    form = await _start_reconfigure(hass, b)
+    with patch(PROBE, return_value=True):
+        result = await hass.config_entries.flow.async_configure(
+            form["flow_id"], {CONF_HOST: "192.0.2.10", CONF_PORT: 502, CONF_SLAVE_ID: 1})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert b.data[CONF_HOST] == "192.0.2.30"
+    # A was moved to .11 earlier (unique_id still .10): adding .11 is refused.
+    hass.config_entries.async_update_entry(a, data={**a.data, CONF_HOST: "192.0.2.11"})
+    again = await _add(hass, {CONF_HOST: "192.0.2.11", CONF_PORT: 502, CONF_SLAVE_ID: 1})
+    assert again["type"] is FlowResultType.ABORT
+    assert again["reason"] == "already_configured"

@@ -16,6 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
@@ -165,6 +166,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await controller.async_start()
     except Exception as err:
         await _async_close_quietly(controller)
+        coordinator.async_clear_work_mode_issue()
+        coordinator.async_clear_needs_human_issue()
         raise ConfigEntryNotReady(f"FoxESS controller did not start: {err}") from err
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
@@ -196,9 +199,14 @@ async def _async_apply_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     charger would fall back to its own maximum. The select reads its option
     from the entry, so listeners are notified to refresh availability."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    coordinator.update_interval = timedelta(
+    interval = timedelta(
         seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     )
+    if interval != coordinator.update_interval:
+        # Poll now: the queued poll keeps the old timing, and the shorter
+        # freshness window would mark the entities unavailable until then.
+        coordinator.update_interval = interval
+        await coordinator.async_refresh()
     coordinator.async_update_listeners()
 
 
@@ -222,6 +230,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """The entry was deleted: remove its stored intent, session and energy files."""
+    for issue in (f"wrong_work_mode_{entry.entry_id}", f"needs_human_{entry.entry_id}"):
+        ir.async_delete_issue(hass, DOMAIN, issue)
     try:
         await ChargerStorage(hass, entry.entry_id).async_remove_all()
     except Exception:  # noqa: BLE001 - removal must not fail on leftover files
