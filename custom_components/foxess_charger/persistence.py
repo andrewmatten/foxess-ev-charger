@@ -197,7 +197,8 @@ class ChargerStorage:
 
         legacy_now = {"session": session, "setpoints": setpoints}
         use_state = (
-            ok_state and state is not None
+            ok_state and ok_sess and ok_set
+            and state is not None
             and isinstance(state, dict)
             and (
                 state.get("legacy_fingerprint") == legacy_now
@@ -212,7 +213,11 @@ class ChargerStorage:
                 result.controller = dict(controller)
             else:
                 issues.append("controller_state_malformed")
-                hard = self._is_hard_latch(controller)
+                hard = (
+                    not isinstance(controller, dict)
+                    or controller.get("safety_latched") is not False
+                    or self._session_stop_pending_or_bad(session, ok_sess)
+                )
                 result.controller = protective_state(
                     *self._salvage_limits(controller, setpoints),
                     safety_latched=hard,
@@ -225,13 +230,18 @@ class ChargerStorage:
         elif not ok_state or (state is not None and not isinstance(state, dict)):
             issues.append("controller_state_malformed")
             result.source = "state"
-            result.controller = protective_state(*self._salvage_limits(None, setpoints))
+            result.controller = protective_state(
+                *self._salvage_limits(None, setpoints),
+                safety_latched=True,
+                latch_cause="hard",
+            )
         elif session is None and setpoints is None and state is None and ok_sess and ok_set:
             result.source = "none"
         else:
             result.source = "legacy"
             result.controller = self._import_legacy(
-                session, setpoints, ok_sess and ok_set, state, issues
+                session, setpoints, ok_sess and ok_set, state, issues,
+                session_readable=ok_sess,
             )
 
         attempted = self._attempted.get(self._entry_id)
@@ -259,6 +269,16 @@ class ChargerStorage:
             self._session_fields[key] = result.session.get(key)
         self._session_extra["rearm_required"] = bool(result.session.get("rearm_required", False))
         return result
+
+    @staticmethod
+    def _session_stop_pending_or_bad(session: Any, ok_sess: bool) -> bool:
+        if not ok_sess:
+            return True
+        if session is None:
+            return False
+        if not isinstance(session, dict):
+            return True
+        return session.get("stop_pending", False) is not False
 
     @staticmethod
     def _is_hard_latch(controller: Any) -> bool:
@@ -326,7 +346,7 @@ class ChargerStorage:
         return power, current, malformed
 
     def _import_legacy(self, session: Any, setpoints: Any, readable: bool,
-                       state: Any, issues: list[str]) -> dict:
+                       state: Any, issues: list[str], *, session_readable: bool = True) -> dict:
         power, current, bad_limits = self._legacy_limits(setpoints)
         if bad_limits:
             issues.append("legacy_setpoints_malformed")
@@ -348,7 +368,9 @@ class ChargerStorage:
         # A partial save (legacy written with stop_pending=True while the new
         # state file failed or crashed) cannot be told apart from a hard latch,
         # so fail closed: import as an unclassified latch (loads as hard).
-        partial_latch = state is not None and bool(stop_pending)
+        partial_latch = state is not None and (
+            bool(stop_pending) or bad_session or not session_readable
+        )
         revision = 0
         if valid_controller_state(src_ctrl):
             revision = src_ctrl["revision"] + 1
@@ -359,7 +381,7 @@ class ChargerStorage:
                 current,
                 revision,
                 safety_latched=latched,
-                latch_cause="hard" if hard else None,
+                latch_cause="hard" if latched else None,
                 **user_safety,
             )
         # 2.4.3 leaves both stop flags false after a session ends naturally,
