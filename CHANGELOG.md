@@ -17,7 +17,7 @@ Big review release: two independent deep-dive reviews, a council review and the 
 - Turning charging on with Max Charging Power below 1.4 kW now gives an error instead of silently staying paused.
 - Storage writes are serialised, so two saves at once can no longer lose a pause or latch on restart. A 22 kW charger reporting slightly over 22.0 kW enables and saves cleanly (capped at 22.0 kW so rolling back to 3.1.x keeps any saved fault latch).
 - Pause confirmation after a Stop needs valid readings. A poll on a bad link holds the controller for at most ~9 s (was ~22 s).
-- A turn-on staged before plug-in is applied the moment the car plugs in, including in Plug&Charge, so the charger never runs at its own maximum first. A limit below 1.4 kW is kept on the charger across an unplug.
+- A turn-on staged before plug-in is applied on the first poll that sees the car plugged in, including in Plug&Charge, instead of waiting for the next refresh cycle (in Plug&Charge the charger may still open the session at its previous/default limit until that first poll runs). A limit below 1.4 kW is kept on the charger across an unplug.
 - Turning charging on while the link is unreliable waits for good readings instead of reporting success without a session. Pausing a locked charger no longer hangs or latches a false fault.
 - Storage problems fail safe: an unreadable or damaged state file loads paused (latched if a fault may have been active), and a failed pause or fault save can no longer be overwritten by an older state.
 - The 45 s no-acknowledgement guard also applies while recovering from a link drop. The charger's maximum power is learned from normal polls if the first read failed.

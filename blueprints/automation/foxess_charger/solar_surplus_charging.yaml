@@ -6,12 +6,13 @@
 # how much solar is actually available.
 #
 # Design:
-#   - Triggers on every change of the grid power sensor, plus a once-a-
-#     minute time_pattern safety net (so a sensor that stops updating
-#     doesn't silently freeze the last setpoint forever - it'll still hit
-#     the fail-safe branch below on the next minute tick if it went
-#     unavailable, rather than only reacting to state changes that may
-#     never come).
+#   - Triggers on every change of the grid power sensor, on charging switch
+#     changes (including staged `intent_enabled`), on vehicle-connection /
+#     status changes that should disarm a staged enable, plus a once-a-minute
+#     time_pattern safety net (so a sensor that stops updating doesn't silently
+#     freeze the last setpoint forever - it'll still hit the fail-safe branch
+#     below on the next minute tick if it went unavailable, rather than only
+#     reacting to state changes that may never come).
 #   - Grid power is converted to Watts using the sensor's unit_of_measurement
 #     (W or kW). Unsupported/missing units fail safe. Sign convention is then
 #     positive = importing and negative = exporting surplus; flip "Invert
@@ -175,6 +176,10 @@ blueprint:
 mode: single
 max_exceeded: silent
 
+trigger_variables:
+  trigger_charging_switch: !input charging_switch
+  trigger_vehicle_connected: !input vehicle_connected
+
 variables:
   grid_power_sensor: !input grid_power_sensor
   grid_power_unit: "{{ state_attr(grid_power_sensor, 'unit_of_measurement') }}"
@@ -224,6 +229,39 @@ variables:
 trigger:
   - trigger: state
     entity_id: !input grid_power_sensor
+  - trigger: state
+    entity_id: !input charging_switch
+  - trigger: template
+    value_template: >
+      {% set intent = state_attr(trigger_charging_switch, 'intent_enabled') == true %}
+      {% set sw_off = is_state(trigger_charging_switch, 'off') %}
+      {% set dev = device_id(trigger_charging_switch) %}
+      {% set sibs = device_entities(dev) if dev else [] %}
+      {% set ns = namespace(plug=none, status=none) %}
+      {% for e in sibs %}
+        {% if e.startswith('binary_sensor.') and state_attr(e, 'device_class') == 'plug' %}
+          {% set ns.plug = e %}
+        {% elif e.startswith('sensor.') and 'finished' in (state_attr(e, 'options') or []) %}
+          {% set ns.status = e %}
+        {% endif %}
+      {% endfor %}
+      {% if trigger_vehicle_connected is string and trigger_vehicle_connected %}
+        {% if trigger_vehicle_connected.startswith('binary_sensor.') %}
+          {% set ok = is_state(trigger_vehicle_connected, 'on') %}
+        {% else %}
+          {% set ok = states(trigger_vehicle_connected) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+        {% endif %}
+      {% elif ns.plug is not none %}
+        {% set ok = is_state(ns.plug, 'on') %}
+      {% else %}
+        {% set ok = false %}
+      {% endif %}
+      {% set status_state = states(ns.status) if ns.status is not none else none %}
+      {% if ok and status_state is not none
+          and status_state not in ['unknown', 'unavailable'] %}
+        {% set ok = status_state in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+      {% endif %}
+      {{ intent and sw_off and not ok }}
   - trigger: time_pattern
     minutes: "/1"
 
