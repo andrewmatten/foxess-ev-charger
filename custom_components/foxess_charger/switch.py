@@ -93,8 +93,8 @@ class _ControllerSwitch(
 class FoxESSChargingSwitch(_ControllerSwitch):
     """On while charging is enabled and a session is in progress, including
     a pause requested by the vehicle. Off when the user paused charging, a
-    fault latch or Stop holds output at zero, or no session is running;
-    unknown while the status cannot be read."""
+    power limit below the 1.4 kW minimum, a fault latch or Stop holds output
+    at zero, or no session is running; unknown while the status cannot be read."""
 
     entity_description = SwitchEntityDescription(
         key="charging",
@@ -106,7 +106,9 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     @property
     def is_on(self) -> bool | None:
         controller = self.coordinator.controller
-        if not controller.intent_enabled or controller.phase in ("faulted", "stopped"):
+        if not controller.intent_enabled or controller.phase in (
+            "faulted", "stopped", "paused_below_minimum",
+        ):
             return False
         status = valid_status(self.coordinator.data or {})
         if status is None:

@@ -319,6 +319,10 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         data["needs_human"] = getattr(self.controller, "needs_human", False) is True
         data["latch_cause"] = getattr(self.controller, "latch_cause", None)
         data["latch_release_in"] = diag.get("latch_release_in")
+        protective = diag.get("protective_reasons")
+        data["protective_reasons"] = (
+            list(protective) if isinstance(protective, (list, tuple, set)) else []
+        )
         data["desired_power_raw"] = getattr(self.controller, "desired_power_raw", None)
         data["desired_current_raw"] = getattr(self.controller, "desired_current_raw", None)
 

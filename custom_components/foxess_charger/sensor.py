@@ -193,9 +193,21 @@ def _transport_details(data: Observation) -> dict:
 # itself is named by its cause; any other cause counts as a charger fault.
 _LATCH_REASONS = {"stop_failed": "stop_failed", "comms": "link_problem"}
 STATUS_REASONS = (
-    "charger_offline", "needs_attention", "stop_failed", "charger_fault", "link_problem",
-    "link_uncertain", "car_not_connected", "charger_locked", "charging_off", "waiting_for_car",
-    "starting", "charging",
+    "charger_offline",
+    "status_unreadable",
+    "needs_attention",
+    "stop_failed",
+    "charger_fault",
+    "link_problem",
+    "safety_config_unconfirmed",
+    "link_uncertain",
+    "car_not_connected",
+    "charger_locked",
+    "paused_below_minimum",
+    "charging_off",
+    "waiting_for_car",
+    "starting",
+    "charging",
 )
 
 
@@ -204,7 +216,7 @@ def _status_reason(data: Observation) -> str:
     cause, phase = data.get("latch_cause"), data.get("control_phase")
     # status_block_ok is absent when the poll returned nothing, so anything but
     # True means this poll got no fresh status (stale carried-over fields).
-    if status is None or data.get("status_block_ok") is not True:
+    if data.get("status_block_ok") is not True:
         return "charger_offline"
     if data.get("needs_human"):
         return "needs_attention"
@@ -212,15 +224,24 @@ def _status_reason(data: Observation) -> str:
         return _LATCH_REASONS.get(cause, "charger_fault")
     if status == 6:  # the charger itself reports a fault
         return "charger_fault"
+    if (
+        data.get("safety_config_unconfirmed") is True
+        or "safety_config_unconfirmed" in (data.get("protective_reasons") or ())
+    ):
+        return "safety_config_unconfirmed"
+    if status is None:
+        return "status_unreadable"
     if phase in ("uncertain", "faulted"):  # protective zero, link or cap unconfirmed
         return "link_uncertain"
     if status == 0 or data.get("cc_status") == 0:
         return "car_not_connected"
-    if status == 8:  # the charger refuses to charge
+    if status == 8 or data.get("work_mode") == 2:  # the charger refuses to charge
         return "charger_locked"
-    if data.get("intent_enabled") is False or phase in ("paused", "paused_below_minimum", "stopped"):
+    if data.get("intent_enabled") is False or phase in ("paused", "stopped"):
         return "charging_off"
-    if status == 3:
+    if phase == "paused_below_minimum":
+        return "paused_below_minimum"
+    if status in (3, STATUS_PHASE_SWITCHING):
         return "charging"
     return "starting" if status == 2 else "waiting_for_car"
 

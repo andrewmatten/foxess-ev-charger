@@ -30,8 +30,8 @@ def _fake(*, status=1, cc=1, enabled=True, phase="enabled", cause=None,
 
 
 CASES = [
-    ("charger_offline", dict(status=99)),
-    ("charger_offline", dict(status=99, human=True)),   # offline wins
+    ("status_unreadable", dict(status=99)),
+    ("needs_attention", dict(status=99, human=True)),   # hard latch wins over bad status enum
     ("needs_attention", dict(cause="hard", human=True, phase="faulted")),
     ("stop_failed", dict(cause="stop_failed", phase="faulted")),
     ("charger_fault", dict(cause="fault", phase="faulted")),
@@ -41,7 +41,7 @@ CASES = [
     ("car_not_connected", dict(status=0, cc=0, phase="paused", enabled=False)),
     ("charger_locked", dict(status=8)),
     ("charging_off", dict(enabled=False, phase="paused")),
-    ("charging_off", dict(phase="paused_below_minimum")),
+    ("paused_below_minimum", dict(phase="paused_below_minimum")),
     ("waiting_for_car", dict(status=1)),
     ("waiting_for_car", dict(status=4)),
     ("waiting_for_car", dict(status=5)),
