@@ -110,6 +110,13 @@ def is_active_status(value: Any) -> bool:
     return is_valid_status(value) and value in ACTIVE_STATUSES
 
 
+def format_firmware_version(raw: Any) -> str | None:
+    """Decode 0x1001 (high byte major, low byte minor), or None if missing/sentinel."""
+    if not _is_int(raw) or not (0 <= raw < 0xFFFF):
+        return None
+    return f"{raw >> 8}.{raw & 0xFF}"
+
+
 # ── Register descriptors ─────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -273,7 +280,8 @@ async def _read_optional(io: RegisterIO, block: Block, snap: dict[str, Any]) -> 
 class SnapshotReader:
     """Stateful snapshot helper owned by whoever owns the transport.
 
-    - Static identity is read until each string has been obtained once, then
+    - Static identity is read until each string has been obtained once (or the
+      charger definitively refuses its register with a Modbus exception), then
       served from cache; it never costs a per-poll wire read afterwards.
     - The automatic phase switching block is polled until the device definitively refuses it
       (Modbus exception, as on single-phase units); after that it is no
@@ -284,6 +292,7 @@ class SnapshotReader:
         self._io = io
         self._clock = clock
         self._identity: dict[str, str] = {}
+        self._refused_identity: set[int] = set()
         self.phase_box_supported: bool | None = None
 
     @property
@@ -302,8 +311,17 @@ class SnapshotReader:
         elif ok is False and snap.get(f"{PHASE_BOX_BLOCK.name}_block_refused"):
             self.phase_box_supported = False
 
-        if len(self._identity) < len(IDENTITY_FIELDS):
-            missing = tuple(f for f in IDENTITY_FIELDS if f[0] not in self._identity)
-            self._identity.update(await async_read_identity(self._io, missing))
+        for key, address, count in IDENTITY_FIELDS:
+            if key in self._identity or address in self._refused_identity:
+                continue
+            try:
+                text = decode_ascii(await self._io.read(address, count))
+            except CommandRefused:
+                self._refused_identity.add(address)
+                continue
+            except TransportError:
+                continue
+            if text:
+                self._identity[key] = text
         snap.update(self._identity)
         return snap

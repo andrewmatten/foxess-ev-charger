@@ -12,6 +12,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -77,6 +78,7 @@ class _ControllerSwitch(
         try:
             result = await command
         except ControlError as err:
+            await self.coordinator.async_request_refresh()
             raise HomeAssistantError(f"FoxESS: failed to {action}: {err}") from err
         self._applying_service_context = ctx
         try:
@@ -92,8 +94,8 @@ class _ControllerSwitch(
 class FoxESSChargingSwitch(_ControllerSwitch):
     """On while charging is enabled and a session is in progress, including
     a pause requested by the vehicle. Off when the user paused charging, a
-    fault latch or Stop holds output at zero, or no session is running;
-    unknown while the status cannot be read."""
+    power limit below the 1.4 kW minimum, a fault latch or Stop holds output
+    at zero, or no session is running; unknown while the status cannot be read."""
 
     entity_description = SwitchEntityDescription(
         key="charging",
@@ -105,7 +107,9 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     @property
     def is_on(self) -> bool | None:
         controller = self.coordinator.controller
-        if not controller.intent_enabled or controller.phase in ("faulted", "stopped"):
+        if not controller.intent_enabled or controller.phase in (
+            "faulted", "stopped", "paused_below_minimum",
+        ):
             return False
         status = valid_status(self.coordinator.data or {})
         if status is None:
@@ -121,13 +125,15 @@ class FoxESSChargingSwitch(_ControllerSwitch):
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        # A hard latch needs a person (a call with a user, not an automation)
-        # who could already see it in Home Assistant.
+        # A hard latch needs a person (a call with a user, not an automation).
+        # Read needs_human live from the controller, matching is_on and
+        # extra_state_attributes rather than possibly stale coordinator.data.
         context = self._take_service_context()
         person = context is not None and context.user_id is not None
-        shown = (self.coordinator.data or {}).get("needs_human") is True
+        controller = self.coordinator.controller
+        clear_hard = person and bool(getattr(controller, "needs_human", False))
         await self._async_command(
-            self.coordinator.controller.async_enable(clear_hard=person and shown),
+            controller.async_enable(clear_hard=clear_hard),
             "start charging",
             context=context,
         )
@@ -148,6 +154,7 @@ class FoxESSLockSwitch(_ControllerSwitch):
         key="lock",
         translation_key="lock",
         icon="mdi:lock",
+        entity_category=EntityCategory.CONFIG,
     )
     _block = BLOCK_STATUS
 
@@ -179,6 +186,7 @@ class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
         key="auto_phase_switch",
         translation_key="auto_phase_switch",
         icon="mdi:auto-fix",
+        entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
     )
     _block = BLOCK_PHASE_BOX

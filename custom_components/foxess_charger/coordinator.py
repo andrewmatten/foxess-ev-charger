@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -22,7 +22,7 @@ from .const import (
     WORK_MODE_MAP, decode_bitmask,
 )
 from .energy import EnergyTracker
-from .protocol import UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
+from .protocol import UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE, format_firmware_version
 from .session import SessionTracker
 
 if TYPE_CHECKING:
@@ -214,8 +214,32 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         self._sync_needs_human_issue(data["needs_human"])
         if fresh[BLOCK_CONFIG]:
             self._sync_work_mode_issue(data.get("work_mode"))
+        self._sync_device_info(data)
         await self._async_persist()
         return data
+
+    def _sync_device_info(self, data: dict) -> None:
+        """Update the device registry once model, serial or firmware arrives."""
+        if self.entry_id is None:
+            return
+        model = data.get("id_model_code")
+        serial = data.get("id_serial_number")
+        sw_version = format_firmware_version(data.get("software_version"))
+        if not (model or serial or sw_version):
+            return
+        registry = dr.async_get(self.hass)
+        device = registry.async_get_device(identifiers={(DOMAIN, self.entry_id)})
+        if device is None:
+            return
+        updates: dict[str, str] = {}
+        if isinstance(model, str) and model and device.model != model:
+            updates["model"] = model
+        if isinstance(serial, str) and serial and device.serial_number != serial:
+            updates["serial_number"] = serial
+        if sw_version is not None and device.sw_version != sw_version:
+            updates["sw_version"] = sw_version
+        if updates:
+            registry.async_update_device(device.id, **updates)
 
     @property
     def _work_mode_issue_id(self) -> str:
@@ -295,6 +319,10 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         data["needs_human"] = getattr(self.controller, "needs_human", False) is True
         data["latch_cause"] = getattr(self.controller, "latch_cause", None)
         data["latch_release_in"] = diag.get("latch_release_in")
+        protective = diag.get("protective_reasons")
+        data["protective_reasons"] = (
+            list(protective) if isinstance(protective, (list, tuple, set)) else []
+        )
         data["desired_power_raw"] = getattr(self.controller, "desired_power_raw", None)
         data["desired_current_raw"] = getattr(self.controller, "desired_current_raw", None)
 

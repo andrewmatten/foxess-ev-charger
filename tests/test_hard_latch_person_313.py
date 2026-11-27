@@ -149,8 +149,9 @@ class Fake(FakeController):
 
 @pytest.mark.parametrize("person, published, expected", [
     (False, True, False),                           # automation: Context() has no user
+    (False, False, False),                          # automation, latch not yet polled
     (True, True, True),                             # person who saw the latch
-    (True, False, False),                           # person, latch not yet shown
+    (True, False, True),                            # person, live controller latch (C18)
 ])
 async def test_switch_passes_clear_hard_only_for_a_person(
     hass, enable_custom_integrations, hass_admin_user, person, published, expected,

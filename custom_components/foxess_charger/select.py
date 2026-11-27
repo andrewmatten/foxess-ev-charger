@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -104,6 +105,7 @@ class FoxESSWorkModeSelect(_EnumRegisterSelect):
         key="work_mode",
         translation_key="work_mode_control",
         icon="mdi:ev-station",
+        entity_category=EntityCategory.CONFIG,
     )
     _block = BLOCK_CONFIG
     _codes = WORK_MODE_SELECT_OPTIONS
@@ -125,6 +127,7 @@ class FoxESSPhaseSelect(_EnumRegisterSelect):
         key="phase_sequence",
         translation_key="phase_switching_control",
         icon="mdi:electric-switch",
+        entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
     )
     _block = BLOCK_STATUS

@@ -7,6 +7,7 @@ transport; every hardware change goes through the controller's API.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 import time  # noqa: F401 - kept on module for test_service_context clock patch
 from datetime import timedelta
@@ -22,6 +23,7 @@ from .const import (
 )
 from .coordinator import FoxESSChargerCoordinator
 from .persistence import ChargerStorage
+from .protocol import format_firmware_version
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,15 +54,28 @@ async def async_create_controller(hass: HomeAssistant, entry: ConfigEntry, *, pe
 
 
 def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator) -> DeviceInfo:
-    """One device per config entry, identified by the entry ID. The model
-    is the charger's own once it has been read."""
-    reported_model = (coordinator.data or {}).get("id_model_code")
-    return DeviceInfo(
+    """One device per config entry, identified by the entry ID. Model, serial
+    number and firmware version come from the charger once read."""
+    raw_data = getattr(coordinator, "data", None)
+    data = raw_data if isinstance(raw_data, Mapping) else {}
+    reported_model = data.get("id_model_code")
+    serial = data.get("id_serial_number")
+    sw_version = format_firmware_version(data.get("software_version"))
+    info = DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
         manufacturer=MANUFACTURER,
-        model=reported_model or DEFAULT_MODEL,
+        model=(
+            reported_model
+            if isinstance(reported_model, str) and reported_model
+            else DEFAULT_MODEL
+        ),
         name=DEVICE_NAME,
     )
+    if isinstance(serial, str) and serial:
+        info["serial_number"] = serial
+    if sw_version is not None:
+        info["sw_version"] = sw_version
+    return info
 
 
 class FoxESSServiceContextMixin:
