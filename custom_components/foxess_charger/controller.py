@@ -910,6 +910,7 @@ class ChargingController:
         goes back on the wire now) and only an explicit enable charges.
         """
         i = self._intent
+        below_min = i.power_raw is not None and i.power_raw < MIN_ENABLE_POWER_RAW
         user_pause = (
             self._explicit_zero()
             and not i.safety_latched
@@ -917,6 +918,22 @@ class ChargingController:
         )
         if not user_pause or not self._initialized:
             self._released, self._unplug_first = False, None
+            return False
+        if below_min:
+            # A < 1.4 kW cap is never adopted on replug; keep zero refreshed
+            # so 0x3002 cannot expire to rated maximum before a new session.
+            if self._released:
+                self._released, self._unplug_first = False, None
+                return True
+            if ev.valid and ev.cc_status == 0 and i.stop_fallback:
+                if self._unplug_first is None:
+                    self._unplug_first = ev.at
+                elif ev.at - self._unplug_first >= OBSERVATION_GAP_S:
+                    self._unplug_first = None
+                    await self._update(stop_fallback=False)
+                    return True
+            else:
+                self._unplug_first = None
             return False
         if self._released:
             if not (ev.valid and ev.cc_status == 1):
