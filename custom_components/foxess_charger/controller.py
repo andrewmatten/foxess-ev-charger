@@ -1850,8 +1850,9 @@ class ChargingController:
                 "Max Charging Power is below 1.4 kW, charging cannot start"
             )
         async def enable() -> CommandResult:
-            # No await between this check and the change in _update_positive,
-            # so on the one event loop no hard latch can land in between.
+            # _update_positive captures ``before = self._intent`` before
+            # awaiting the candidate save, and rejects the enable (re-saving
+            # the newer intent) if a hard latch lands while saving.
             if self.needs_human and not clear_hard:
                 raise ControlError("charging is off after a fault that needs a person: "
                                    "turn the charging switch on yourself in Home Assistant")
