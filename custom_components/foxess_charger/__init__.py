@@ -35,7 +35,7 @@ DEFAULT_MODEL = "A7300P1-E-B-WO"
 
 __all__ = [
     "FoxESSChargerCoordinator", "FoxESSBlockAvailabilityMixin", "build_device_info",
-    "async_create_controller", "async_setup_entry", "async_unload_entry",
+    "async_create_controller", "async_remove_entry", "async_setup_entry", "async_unload_entry",
 ]
 
 
@@ -184,6 +184,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_shutdown()
         except Exception:  # noqa: BLE001 - must not mask the setup failure
             _LOGGER.exception("Error shutting down FoxESS coordinator")
+        coordinator.async_clear_work_mode_issue()
+        coordinator.async_clear_needs_human_issue()
         raise
     entry.async_on_unload(entry.add_update_listener(_async_apply_options))
     return True
@@ -207,9 +209,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     coordinator = runtime["coordinator"]
-    coordinator.async_clear_work_mode_issue()
-    coordinator.async_clear_needs_human_issue()
     await coordinator.async_shutdown()
     await runtime["controller"].async_close()
     await coordinator.async_flush()
+    # Cleared last: a poll still in flight during shutdown could raise them again.
+    coordinator.async_clear_work_mode_issue()
+    coordinator.async_clear_needs_human_issue()
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """The entry was deleted: remove its stored intent, session and energy files."""
+    try:
+        await ChargerStorage(hass, entry.entry_id).async_remove_all()
+    except Exception:  # noqa: BLE001 - removal must not fail on leftover files
+        _LOGGER.exception("Could not remove FoxESS charger storage")

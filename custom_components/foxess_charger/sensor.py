@@ -52,6 +52,7 @@ from .const import (
     get_capabilities,
 )
 from .protocol import (
+    format_firmware_version,
     STATUS_NAMES,
     STATUS_PHASE_SWITCHING,
     UNKNOWN_ALARM_CODE,
@@ -139,9 +140,8 @@ def _decoded(
     return value
 
 
-def _firmware(data: Observation) -> str:
-    raw = data.get("software_version", 0)
-    return f"{raw >> 8}.{raw & 0xFF}"
+def _firmware(data: Observation) -> str | None:
+    return format_firmware_version(data.get("software_version"))
 
 
 def _port_celsius(data: Observation) -> float | None:
@@ -151,8 +151,11 @@ def _port_celsius(data: Observation) -> float | None:
     return round(raw * 0.1 - 50, 1)
 
 
-def _board_celsius(data: Observation) -> float:
-    return round(data.get("ambient_temp_raw", 0) * 0.1 - 50, 1)
+def _board_celsius(data: Observation) -> float | None:
+    raw = data.get("ambient_temp_raw")
+    if not isinstance(raw, int) or raw == 65535:   # missing or sentinel
+        return None
+    return round(raw * 0.1 - 50, 1)
 
 
 def _kwh(key: str) -> Callable[[Observation], float | None]:

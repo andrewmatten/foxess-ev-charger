@@ -10842,7 +10842,7 @@
         'none_values': dict({
           'attributes': dict({
           }),
-          'value': 'raises TypeError',
+          'value': None,
         }),
         'paused_by_vehicle': dict({
           'attributes': dict({
@@ -13685,12 +13685,12 @@
         'missing_keys': dict({
           'attributes': dict({
           }),
-          'value': '0.0',
+          'value': None,
         }),
         'none_values': dict({
           'attributes': dict({
           }),
-          'value': 'raises TypeError',
+          'value': None,
         }),
         'paused_by_vehicle': dict({
           'attributes': dict({
