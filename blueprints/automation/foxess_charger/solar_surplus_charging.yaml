@@ -192,6 +192,33 @@ variables:
        + (min_adjustment_interval.seconds | default(0, true))
        if min_adjustment_interval is mapping
        else (min_adjustment_interval | int(120)) }}
+  intent_enabled: "{{ state_attr(charging_switch, 'intent_enabled') == true }}"
+  car_connected: >
+    {% set dev = device_id(charging_switch) %}
+    {% set sibs = device_entities(dev) if dev else [] %}
+    {% set ns = namespace(plug=none, status=none) %}
+    {% for e in sibs %}
+      {% if e.startswith('binary_sensor.') and state_attr(e, 'device_class') == 'plug' %}
+        {% set ns.plug = e %}
+      {% elif e.startswith('sensor.') and 'finished' in (state_attr(e, 'options') or []) %}
+        {% set ns.status = e %}
+      {% endif %}
+    {% endfor %}
+    {% if vehicle_connected is string and vehicle_connected %}
+      {% if vehicle_connected.startswith('binary_sensor.') %}
+        {% set ok = is_state(vehicle_connected, 'on') %}
+      {% else %}
+        {% set ok = states(vehicle_connected) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+      {% endif %}
+    {% elif ns.plug is not none %}
+      {% set ok = is_state(ns.plug, 'on') %}
+    {% else %}
+      {% set ok = false %}
+    {% endif %}
+    {% if ok and ns.status is not none %}
+      {% set ok = states(ns.status) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+    {% endif %}
+    {{ ok }}
 
 trigger:
   - trigger: state
@@ -214,12 +241,25 @@ action:
           - if:
               - condition: template
                 value_template: >
-                  {{ not is_state(charging_switch, 'off') or
-                     state_attr(charging_switch, 'intent_enabled') == true }}
+                  {{ is_state(charging_switch, 'on') or intent_enabled }}
             then:
               - action: switch.turn_off
                 target:
                   entity_id: !input charging_switch
+      # Car gone (unplugged, or the charger no longer shows it connected)
+      # while an enable is still staged: disarm it now, so the next plug-in
+      # (e.g. at night) never starts at the last setpoint. Before the dwell
+      # gate, and independent of grid power (a house battery can hold the
+      # grid near 0 W, so the over-import branch would never fire).
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ intent_enabled and not is_state(charging_switch, 'on')
+                 and not car_connected }}
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: !input charging_switch
     default:
       # Guard an unavailable/unknown/missing Max Charging Current entity so
       # a missing state never raises on `.last_changed` or gets coerced to 6 A.
@@ -247,37 +287,10 @@ action:
           entity_min: "{{ state_attr(max_current_number, 'min') | float(6) }}"
           entity_max: "{{ state_attr(max_current_number, 'max') | float(32) }}"
           switch_is_off: "{{ is_state(charging_switch, 'off') }}"
-          intent_enabled: "{{ state_attr(charging_switch, 'intent_enabled') == true }}"
-          car_connected: >
-            {% set dev = device_id(charging_switch) %}
-            {% set sibs = device_entities(dev) if dev else [] %}
-            {% set ns = namespace(plug=none, status=none) %}
-            {% for e in sibs %}
-              {% if e.startswith('binary_sensor.') and state_attr(e, 'device_class') == 'plug' %}
-                {% set ns.plug = e %}
-              {% elif e.startswith('sensor.') and 'finished' in (state_attr(e, 'options') or []) %}
-                {% set ns.status = e %}
-              {% endif %}
-            {% endfor %}
-            {% if vehicle_connected is string and vehicle_connected %}
-              {% if vehicle_connected.startswith('binary_sensor.') %}
-                {% set ok = is_state(vehicle_connected, 'on') %}
-              {% else %}
-                {% set ok = states(vehicle_connected) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
-              {% endif %}
-            {% elif ns.plug is not none %}
-              {% set ok = is_state(ns.plug, 'on') %}
-            {% else %}
-              {% set ok = false %}
-            {% endif %}
-            {% if ok and ns.status is not none %}
-              {% set ok = states(ns.status) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
-            {% endif %}
-            {{ ok }}
       - choose:
-          # Import too high - clamp down to entity_min first while charging,
-          # and stop (or disarm a staged intent_enabled) once already at min
-          # or when the switch is already off.
+          # Import too high - step current down (never below entity_min)
+          # while charging, and stop (or disarm a staged intent_enabled)
+          # once already at min or when the switch is already off.
           - conditions:
               - "{{ import_power > (import_ceiling_watts + hysteresis_watts) }}"
             sequence:
@@ -330,7 +343,16 @@ action:
                             data:
                               value: "{{ entity_min }}"
                       - action: switch.turn_on
+                        continue_on_error: true
                         target:
                           entity_id: !input charging_switch
+                      # A refused turn-on (for example Max Charging Power below
+                      # 1.4 kW) is not retried on every grid update: this run
+                      # holds for a minute (mode single drops triggers meanwhile).
+                      - if:
+                          - "{{ state_attr(charging_switch, 'intent_enabled') != true }}"
+                        then:
+                          - delay:
+                              seconds: 60
         # Within the hysteresis band around the ceiling - no adjustment.
         default: []

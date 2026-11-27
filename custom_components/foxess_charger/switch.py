@@ -125,13 +125,16 @@ class FoxESSChargingSwitch(_ControllerSwitch):
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        # A hard latch needs a person (a call with a user, not an automation).
-        # Read needs_human live from the controller, matching is_on and
-        # extra_state_attributes rather than possibly stale coordinator.data.
+        # A hard latch needs a person (a call with a user, not an automation)
+        # who could see it: only the needs_human this switch last showed
+        # counts. A latch that landed since then is not cleared; the refused
+        # command refreshes the state, so the person sees it and can retry.
         context = self._take_service_context()
         person = context is not None and context.user_id is not None
         controller = self.coordinator.controller
-        clear_hard = person and bool(getattr(controller, "needs_human", False))
+        shown = self.hass.states.get(self.entity_id) if self.hass else None
+        clear_hard = person and shown is not None \
+            and shown.attributes.get("needs_human") is True
         await self._async_command(
             controller.async_enable(clear_hard=clear_hard),
             "start charging",

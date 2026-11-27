@@ -209,8 +209,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     coordinator = runtime["coordinator"]
-    await coordinator.async_shutdown()
-    await runtime["controller"].async_close()
+    try:
+        await coordinator.async_shutdown()
+    finally:
+        await runtime["controller"].async_close()   # never leave a writer running
     await coordinator.async_flush()
     # Cleared last: a poll still in flight during shutdown could raise them again.
     coordinator.async_clear_work_mode_issue()
