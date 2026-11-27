@@ -2087,12 +2087,12 @@
         }),
         'three_phase_a011/desired=(22, 100)': dict({
           'attributes': None,
-          'max': 32.0,
+          'max': 16.0,
           'value': 6.0,
         }),
         'three_phase_a011/desired=(None, None)': dict({
           'attributes': None,
-          'max': 32.0,
+          'max': 16.0,
           'value': 6.0,
         }),
         'three_phase_a022/desired=(22, 100)': dict({

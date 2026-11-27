@@ -126,7 +126,8 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         translation_key="default_current", icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         native_min_value=6.0, native_max_value=32.0, native_step=0.1,
-        register=REG_DEFAULT_CURRENT, reading_key="default_current_raw", tenths=True,
+        register=REG_DEFAULT_CURRENT, reading_key="default_current_raw",
+        tenths=True, rated_key="max_current_a",
     ),
     FoxESSNumberEntityDescription(
         key="min_switch_interval",
@@ -175,7 +176,7 @@ class FoxESSNumber(
 
     @property
     def native_max_value(self) -> float:
-        """The detected model's rating for the two charging limits; the
+        """The detected model's rating for capability-bound numbers; the
         description's static maximum for everything else."""
         description = self.entity_description
         if description.rated_key is None:
