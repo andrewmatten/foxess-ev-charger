@@ -33,8 +33,9 @@
 #     falling back to 6/32 only if the entity doesn't report them.
 #   - When import exceeds the ceiling + hysteresis while charging above
 #     `min`, current is clamped down to `min` first; charging is stopped
-#     only once already at (or below) `min`, or immediately if the switch
-#     is already off with a staged `intent_enabled`.
+#     only once already at (or below) `min`, immediately if the current
+#     entity is unavailable/missing so current cannot be stepped down, or
+#     immediately if the switch is already off with a staged `intent_enabled`.
 #   - Fail-safe: if the grid sensor has no numeric value or reports an
 #     unsupported unit, charging (and any staged `intent_enabled`) is
 #     stopped rather than left running or armed with no trustworthy grid
@@ -300,12 +301,32 @@ action:
             target:
               entity_id: !input charging_switch
     default:
+      - variables:
+          raw_grid_power: >
+            {{ (states(grid_power_sensor) | float(0)) *
+               (1000 if grid_power_unit == 'kW' else 1) }}
+          import_power: "{{ (raw_grid_power * -1) if invert_grid_power_sign else raw_grid_power }}"
+          current_available: "{{ is_number(states(max_current_number)) }}"
+          switch_is_off: "{{ is_state(charging_switch, 'off') }}"
+      # If Max Charging Current is unavailable/unknown/missing (e.g. config
+      # register block dropped while status and charging switch stay healthy),
+      # we cannot step current down, so over-import must still stop charging
+      # (and disarm any staged enable).
+      - if:
+          - "{{ not current_available }}"
+          - "{{ import_power > (import_ceiling_watts + hysteresis_watts) }}"
+          - "{{ not switch_is_off or intent_enabled }}"
+        then:
+          - action: switch.turn_off
+            target:
+              entity_id: !input charging_switch
       # Guard an unavailable/unknown/missing Max Charging Current entity so
-      # a missing state never raises on `.last_changed` or gets coerced to 6 A.
+      # a missing state never raises on `.last_changed`, gets coerced to 6 A,
+      # or turns charging on without being able to stage minimum current.
       - condition: template
-        value_template: "{{ is_number(states(max_current_number)) }}"
+        value_template: "{{ current_available }}"
       # Minimum dwell time between adjustments - only gates the normal
-      # raise/lower path below, never the fail-safe stop above.
+      # raise/lower path below, never the fail-safe or unavailable-current stops.
       - condition: template
         value_template: >
           {{ states[max_current_number] is not none and (
@@ -317,14 +338,9 @@ action:
                (now() - states[charging_switch].last_changed).total_seconds() >= min_adjustment_seconds
              ) }}
       - variables:
-          raw_grid_power: >
-            {{ (states(grid_power_sensor) | float(0)) *
-               (1000 if grid_power_unit == 'kW' else 1) }}
-          import_power: "{{ (raw_grid_power * -1) if invert_grid_power_sign else raw_grid_power }}"
           current_amps: "{{ states(max_current_number) | float }}"
           entity_min: "{{ state_attr(max_current_number, 'min') | float(6) }}"
           entity_max: "{{ state_attr(max_current_number, 'max') | float(32) }}"
-          switch_is_off: "{{ is_state(charging_switch, 'off') }}"
       - choose:
           # Import too high - step current down (never below entity_min)
           # while charging, and stop (or disarm a staged intent_enabled)

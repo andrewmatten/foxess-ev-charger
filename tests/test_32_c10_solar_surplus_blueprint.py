@@ -152,7 +152,9 @@ async def test_unavailable_or_missing_number_entity_is_guarded(
     h = Harness(hass)
     await h.async_register()
     with freeze_time(T0) as frozen:
-        # NUMBER entity missing from state machine initially.
+        # NUMBER entity missing from state machine initially: over-import still
+        # stops charging because current cannot be stepped down, without writing
+        # to the missing number entity.
         h.set_switch("on")
         h.set_grid(5000)
         await hass.async_block_till_done()
@@ -161,19 +163,26 @@ async def test_unavailable_or_missing_number_entity_is_guarded(
         frozen.move_to(T0 + timedelta(minutes=3))
         h.set_grid(5001)
         await hass.async_block_till_done()
-        assert h.turn_offs == 0
+        assert h.turn_offs == 1
+        assert h.turn_ons == 0
         assert h.number_writes == []
 
-        # NUMBER entity present but unavailable/unknown.
-        for bad_state in ("unavailable", "unknown"):
+        # NUMBER entity present but unavailable/unknown: over-import turns off,
+        # while surplus never turns on or writes number.set_value.
+        for expected_offs, bad_state in enumerate(("unavailable", "unknown"), start=2):
             hass.states.async_set(NUMBER, bad_state, {"min": 6, "max": 32})
+            h.set_grid(200)
+            h.set_switch("on")
+            await hass.async_block_till_done()
             frozen.move_to(frozen.time_to_freeze + timedelta(minutes=3))
             h.set_grid(5010)
             await hass.async_block_till_done()
+            assert h.turn_offs == expected_offs
             frozen.move_to(frozen.time_to_freeze + timedelta(minutes=3))
             h.set_grid(-3000)
             await hass.async_block_till_done()
-        assert h.turn_offs == 0
+        assert h.turn_offs == 3
+        assert h.turn_ons == 0
         assert h.number_writes == []
 
 
