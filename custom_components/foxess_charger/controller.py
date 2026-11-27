@@ -1795,10 +1795,11 @@ class ChargingController:
         Otherwise it is staged, and an observed finish revokes the enable."""
         before = self._intent
         try:
-            intent = await self._update_positive(**changes)
+            attempted = await self._update_positive(**changes)
         except _Superseded:
             self._counters["superseded"] += 1
             return CommandResult("superseded", self._intent.revision)
+        intent = attempted
         saved = self._persisted
         if intent.enabled and not (intent.stop_fallback or intent.safety_latched):
             if any(self._wire()) and not await self._run(self._op_observe):
@@ -1808,7 +1809,17 @@ class ChargingController:
             else:
                 return await self._run(lambda: self._op_apply(intent.revision))
         if not saved:  # a staged value lives only in storage
-            self._rollback(before, changes)
+            # Roll back unsaved increases and changes while not enabled; a
+            # protective decrease while enabled stays in memory to be retried.
+            if (
+                not (
+                    attempted.enabled
+                    and not attempted.stop_fallback
+                    and not attempted.safety_latched
+                )
+                or self._raises_output(before, attempted)
+            ):
+                self._rollback(before, changes)
             raise ControlError("staged value could not be saved")
         return CommandResult("staged", intent.revision)
 
