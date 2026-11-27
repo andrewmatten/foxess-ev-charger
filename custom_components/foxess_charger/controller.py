@@ -568,12 +568,25 @@ class ChargingController:
         )
         self._persisted = saved
         if not saved:
-            raise ControlError(self._persist_error or "change could not be saved; not applied")
+            err = self._persist_error or "change could not be saved; not applied"
+            # Bump past the failed candidate revision and persist the rolled-back
+            # intent (marking pending so the refresh loop retries if storage is
+            # still down), ensuring a partial or late-landing write cannot
+            # resurrect the rejected enable/increase across a restart.
+            self._intent = replace(
+                self._intent,
+                revision=max(self._intent.revision, candidate.revision) + 1,
+            )
+            self._persisted = await self._save_intent()
+            raise ControlError(err)
         if self._intent != before:
             # Something newer (e.g. pause or fault latch) landed while the
             # candidate save was in flight: re-save the newer intent so disk
             # does not hold the stale candidate, and drop this increase.
-            self._intent = replace(self._intent, revision=self._intent.revision + 1)
+            self._intent = replace(
+                self._intent,
+                revision=max(self._intent.revision, candidate.revision) + 1,
+            )
             self._persisted = await self._save_intent()
             if self._intent.safety_latched:
                 raise ControlError(self._last_error or "charger fault; output latched to zero")

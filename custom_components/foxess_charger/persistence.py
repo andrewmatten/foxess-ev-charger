@@ -466,26 +466,29 @@ class ChargerStorage:
         await store.async_save(payload)
         self._written[name] = payload
 
-    async def _async_write_all(self) -> None:
+    async def _async_write_locked(self) -> None:
         # Legacy files first: if the new file then fails to save, the next
         # load sees a fingerprint mismatch and imports the (newer) legacy
-        # projection instead of an older controller state. Serialized so
-        # concurrent controller and session saves cannot interleave and leave
-        # a mismatched legacy_fingerprint on disk.
+        # projection instead of an older controller state. Caller holds
+        # self._write_lock so concurrent controller and session saves cannot
+        # interleave and leave a mismatched legacy_fingerprint on disk.
+        session = self._legacy_session_payload()
+        setpoints = self._legacy_setpoints_payload()
+        controller = dict(self._controller) if self._controller is not None else None
+        session_extra = dict(self._session_extra)
+        await self._save("session", self._session_store, session)
+        await self._save("setpoints", self._setpoints_store, setpoints)
+        if controller is None:
+            return
+        await self._save("state", self._state_store, {
+            "controller": controller,
+            "session": session_extra,
+            "legacy_fingerprint": {"session": session, "setpoints": setpoints},
+        })
+
+    async def _async_write_all(self) -> None:
         async with self._write_lock:
-            session = self._legacy_session_payload()
-            setpoints = self._legacy_setpoints_payload()
-            controller = dict(self._controller) if self._controller is not None else None
-            session_extra = dict(self._session_extra)
-            await self._save("session", self._session_store, session)
-            await self._save("setpoints", self._setpoints_store, setpoints)
-            if controller is None:
-                return
-            await self._save("state", self._state_store, {
-                "controller": controller,
-                "session": session_extra,
-                "legacy_fingerprint": {"session": session, "setpoints": setpoints},
-            })
+            await self._async_write_locked()
 
     async def async_save_controller(self, state: dict) -> None:
         """Persist callback handed to the controller. Raises on failure so
@@ -497,16 +500,28 @@ class ChargerStorage:
         )
         if self._is_hard_latch(state):
             self._attempted_hard[self._entry_id] = True
-        self._controller = dict(state)
-        await self._async_write_all()
-        if not self._is_hard_latch(self._controller):
-            self._attempted_hard.pop(self._entry_id, None)
+        async with self._write_lock:
+            if (
+                self._controller is not None
+                and state["revision"] < self._controller["revision"]
+            ):
+                return
+            previous = self._controller
+            self._controller = dict(state)
+            try:
+                await self._async_write_locked()
+            except BaseException:
+                self._controller = previous
+                raise
+            if not self._is_hard_latch(self._controller):
+                self._attempted_hard.pop(self._entry_id, None)
 
     async def async_save_session(self, fields: dict, *, rearm_required: bool) -> None:
-        for key in self._session_fields:
-            self._session_fields[key] = fields.get(key)
-        self._session_extra["rearm_required"] = rearm_required
-        await self._async_write_all()
+        async with self._write_lock:
+            for key in self._session_fields:
+                self._session_fields[key] = fields.get(key)
+            self._session_extra["rearm_required"] = rearm_required
+            await self._async_write_locked()
 
     async def async_save_energy(self, baselines: dict[str, dict]) -> None:
         async with self._write_lock:
