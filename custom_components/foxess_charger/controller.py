@@ -894,7 +894,7 @@ class ChargingController:
         elif power:     # None = nothing written: never confirm (or Start) a session
             try:
                 started = await self._confirm_session(
-                    wire, self._clock() + self._start_timeout
+                    wire, self._clock() + self._start_timeout, enabling
                 )
             except ControlError:
                 await self._revoke()
@@ -966,16 +966,23 @@ class ChargingController:
             self._work_mode = regs[0]
         return self._work_mode == CONTROLLED_MODE
 
-    async def _confirm_session(self, wire, deadline) -> bool:
-        """True once a session is seen; False if the cable is definitely unplugged.
+    async def _confirm_session(
+        self, wire, deadline, enabling: bool = True,
+    ) -> bool:
+        """True once a session is seen; False if the cable is definitely unplugged
+        (explicit/staged enables only).
 
-        Only reached from an explicit enable (or a staged one applied on
-        plug-in) with the positive limits already confirmed. In Controlled
-        mode, a valid frame showing the cable connected and no session gets
-        0x4001 Start, re-sent every START_RETRY_S while waiting. The outcome
-        of the Start write itself is not judged (refused = a session is
-        already opening); only the status decides."""
-        controlled = await self._controlled_mode()
+        For an explicit enable (or a staged one applied on plug-in) with the
+        positive limits already confirmed: in Controlled mode, a valid frame
+        showing the cable connected and no session gets 0x4001 Start, re-sent
+        every START_RETRY_S while waiting. The outcome of the Start write
+        itself is not judged (refused = a session is already opening); only
+        the status decides.
+
+        A non-enabling limit change never sends Start and never stages for
+        plug-in: if a valid frame shows the session ended or unplugged, it
+        raises so the caller revokes instead."""
+        controlled = await self._controlled_mode() if enabling else False
         next_start = self._clock()
         starts = refused = 0
         refusal_code: int | None = None
@@ -987,10 +994,12 @@ class ChargingController:
                 self._last_obs = ev
             if ev.valid and ev.status in REFUSING_STATUS:
                 raise ControlError(f"charger refuses to charge (status {ev.status})")
-            if ev.valid and ev.cc_status == 0:
-                return False
             if ev.valid and ev.cc_status == 1 and ev.status in SESSION_STATUS:
                 return True
+            if ev.valid and not enabling:
+                raise ControlError("charging session ended; limit change not applied")
+            if ev.valid and ev.cc_status == 0:
+                return False
             if (
                 controlled and ev.valid and ev.status in STOPPED_STATUS
                 and self._clock() >= next_start
@@ -1087,6 +1096,7 @@ class ChargingController:
     async def _revoke(self) -> None:
         """A positive command failed: withdraw the authorization and put a
         confirmed zero on the wire, so nothing starts later by itself."""
+        self._await_plug = False
         await self._update(enabled=False)
         try:
             await self._write_confirmed(
