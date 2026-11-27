@@ -958,13 +958,15 @@ class ChargingController:
                             self._max_power = regs[0]
                     live = await self._read(REG_MAX_CHARGING_POWER)
                     cap = live[0] if live is not None else None
-                    limit_hi = self._max_power if self._max_power is not None else MAX_POWER_RAW
-                    if _is_int(cap) and cap < MIN_ENABLE_POWER_RAW:
-                        power = None
-                    elif _is_int(cap) and MIN_ENABLE_POWER_RAW <= cap <= limit_hi:
+                    # Match first-install adoption: require both a known device
+                    # maximum and a valid live cap read so an unreadable cap can
+                    # never be silently raised to rated maximum.
+                    if (
+                        self._max_power is not None
+                        and _is_int(cap)
+                        and MIN_ENABLE_POWER_RAW <= cap <= self._max_power
+                    ):
                         power = cap
-                    elif self._max_power is not None:
-                        power = self._max_power
                 elif power < MIN_ENABLE_POWER_RAW:
                     power = None
                 self._released = False

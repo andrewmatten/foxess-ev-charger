@@ -69,7 +69,7 @@ async def test_replug_adoption_populates_power_raw_and_survives_restart():
     assert io2.regs[STATUS] == 3
 
 
-async def test_replug_adoption_falls_back_to_device_max_when_live_cap_unreadable():
+async def test_replug_adoption_fails_closed_when_live_cap_unreadable():
     c, io = await _fresh_unplugged(work_mode=1)
     real_read = io.read
     fail_once = [True]
@@ -82,11 +82,14 @@ async def test_replug_adoption_falls_back_to_device_max_when_live_cap_unreadable
 
     io.read = read
     io.regs[CC] = 1
-    io.regs[POW] = 73
+    io.regs[POW] = 20
     io.stopped = False
     await c.async_poll()
-    await spin(lambda: c.intent_enabled and c.desired_power_raw == 73)
-    assert io.regs[POW] == 73 and io.regs[STATUS] == 3
+    await spin(lambda: io.regs[POW] == 0)
+    assert not c.intent_enabled
+    assert c.desired_power_raw is None
+    assert 73 not in io.power_writes()
+    assert io.regs[POWER] == 0
 
 
 async def test_replug_adoption_fails_closed_when_cap_and_max_unreadable():
