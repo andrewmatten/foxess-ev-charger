@@ -84,7 +84,7 @@
         'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': True,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -129,7 +129,7 @@
         'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': True,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -10686,7 +10686,7 @@
             'active_alarms': list([
             ]),
           }),
-          'value': 65535,
+          'value': None,
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -11630,7 +11630,7 @@
             'active_faults': list([
             ]),
           }),
-          'value': 4294967295,
+          'value': None,
         }),
         'three_phase_a011': dict({
           'attributes': dict({

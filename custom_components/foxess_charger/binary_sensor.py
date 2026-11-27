@@ -22,6 +22,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import FoxESSBlockAvailabilityMixin, FoxESSChargerCoordinator, build_device_info
 from .const import BLOCK_PHASE_BOX, BLOCK_STATUS, DOMAIN
+from .protocol import UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
 
 Observation = Mapping[str, Any]
 
@@ -49,11 +50,22 @@ def _when_known(key: str, test: Callable[[int], bool]) -> Callable[[Observation]
 def _has_fault(data: Observation) -> bool | None:
     """On for any set fault bit, and for status 6 on its own (the charger can
     report a fault with the bits clear). Unknown only when the fault register
-    has no value and the status does not show a fault."""
+    has no value (or holds the 0xFFFFFFFF sentinel) and the status does not
+    show a fault."""
     code = data.get("fault_code")
+    if code == UNKNOWN_FAULT_CODE:
+        code = None
     if data.get("status") == _FAULT or (code or 0) > 0:
         return True
     return None if code is None else False
+
+
+def _has_alarm(data: Observation) -> bool | None:
+    """On for any set alarm bit; unknown when missing or 0xFFFF sentinel."""
+    code = data.get("alarm_code")
+    if code in (None, UNKNOWN_ALARM_CODE):
+        return None
+    return code > 0
 
 
 def _unlocked(data: Observation) -> bool | None:
@@ -86,7 +98,7 @@ BINARY_SENSORS: tuple[FoxESSBinarySensorEntityDescription, ...] = (
     FoxESSBinarySensorEntityDescription(
         key="has_alarm", name="Alarm", translation_key="has_alarm",
         device_class=BinarySensorDeviceClass.PROBLEM, icon="mdi:alert",
-        value_fn=_when_known("alarm_code", lambda bits: bits > 0),
+        value_fn=_has_alarm,
     ),
     FoxESSBinarySensorEntityDescription(
         key="is_locked", name="Locked", translation_key="is_locked",

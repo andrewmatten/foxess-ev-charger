@@ -51,7 +51,7 @@ from .const import (
     decode_enum,
     get_capabilities,
 )
-from .protocol import STATUS_PHASE_SWITCHING
+from .protocol import STATUS_PHASE_SWITCHING, UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
 from .session import valid_status
 
 _LOGGER = logging.getLogger(__name__)
@@ -392,17 +392,25 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
         value_fn=_kwh("total_energy_raw"),
     ),
     # Alarm/fault registers are bitmasks; the active condition names go in
-    # an attribute.
+    # an attribute. All-ones sentinels are treated as unknown (None).
     FoxESSSensorEntityDescription(
         key="alarm_code", name="Alarm Code", translation_key="alarm_code", icon="mdi:alert",
-        value_fn=lambda data: data.get("alarm_code"),
-        attrs_fn=lambda data: {"active_alarms": data.get("active_alarms", [])},
+        value_fn=lambda data: None if (v := data.get("alarm_code")) == UNKNOWN_ALARM_CODE else v,
+        attrs_fn=lambda data: {
+            "active_alarms": (
+                [] if data.get("alarm_code") == UNKNOWN_ALARM_CODE else data.get("active_alarms", [])
+            ),
+        },
     ),
     FoxESSSensorEntityDescription(
         key="fault_code", name="Fault Code", translation_key="fault_code",
         icon="mdi:alert-circle",
-        value_fn=lambda data: data.get("fault_code"),
-        attrs_fn=lambda data: {"active_faults": data.get("active_faults", [])},
+        value_fn=lambda data: None if (v := data.get("fault_code")) == UNKNOWN_FAULT_CODE else v,
+        attrs_fn=lambda data: {
+            "active_faults": (
+                [] if data.get("fault_code") == UNKNOWN_FAULT_CODE else data.get("active_faults", [])
+            ),
+        },
     ),
     FoxESSSensorEntityDescription(
         key="rfid_card", name="RFID Card", translation_key="rfid_card",

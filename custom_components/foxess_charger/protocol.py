@@ -88,6 +88,10 @@ STATUS_NAMES: dict[int, str] = {
 # vehicle, phase switching). None of these can confirm a stop.
 ACTIVE_STATUSES = frozenset({2, 3, 4, STATUS_PHASE_SWITCHING})
 
+# All-ones register values mean "unreadable / unknown", not every bit active.
+UNKNOWN_ALARM_CODE = 0xFFFF
+UNKNOWN_FAULT_CODE = 0xFFFFFFFF
+
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -234,6 +238,10 @@ async def async_read_snapshot(
         snap["status"] = None
     if not snap["cc_status_valid"]:
         snap["cc_status"] = None
+    if snap["fault_code"] == UNKNOWN_FAULT_CODE:
+        snap["fault_code"] = None
+    if snap["alarm_code"] == UNKNOWN_ALARM_CODE:
+        snap["alarm_code"] = None
     snap["active_faults"] = decode_bitmask(snap["fault_code"], FAULT_BITS, "fault_code")
     snap["active_alarms"] = decode_bitmask(snap["alarm_code"], ALARM_BITS, "alarm_code")
 

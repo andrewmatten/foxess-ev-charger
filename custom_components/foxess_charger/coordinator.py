@@ -22,6 +22,7 @@ from .const import (
     WORK_MODE_MAP, decode_bitmask,
 )
 from .energy import EnergyTracker
+from .protocol import UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
 from .session import SessionTracker
 
 if TYPE_CHECKING:
@@ -195,9 +196,13 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         if self.sessions.last_session is not None:
             data["last_session"] = self.sessions.last_session
 
-        if "active_faults" not in observation:
+        if data.get("fault_code") == UNKNOWN_FAULT_CODE:
+            data["fault_code"] = None
+        if data.get("alarm_code") == UNKNOWN_ALARM_CODE:
+            data["alarm_code"] = None
+        if "active_faults" not in observation or observation.get("fault_code") == UNKNOWN_FAULT_CODE:
             data["active_faults"] = decode_bitmask(data.get("fault_code"), FAULT_BITS, "fault_code")
-        if "active_alarms" not in observation:
+        if "active_alarms" not in observation or observation.get("alarm_code") == UNKNOWN_ALARM_CODE:
             data["active_alarms"] = decode_bitmask(data.get("alarm_code"), ALARM_BITS, "alarm_code")
         self._add_controller_view(data)
         self._sync_needs_human_issue(data["needs_human"])
