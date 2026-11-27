@@ -437,20 +437,23 @@ class ChargingController:
             "persist_error": self._persist_error,
         }
 
-    def export_state(self) -> dict:
-        i, wall, now = self._intent, self._wall(), self._clock()
+    def _export_state(self, intent: Intent) -> dict:
+        wall, now = self._wall(), self._clock()
         return {
-            "schema": SCHEMA, "enabled": i.enabled, "power_raw": i.power_raw,
-            "current_raw": i.current_raw, "revision": i.revision,
-            "safety_latched": i.safety_latched, "stop_fallback": i.stop_fallback,
-            "latch_cause": i.latch_cause,
+            "schema": SCHEMA, "enabled": intent.enabled, "power_raw": intent.power_raw,
+            "current_raw": intent.current_raw, "revision": intent.revision,
+            "safety_latched": intent.safety_latched, "stop_fallback": intent.stop_fallback,
+            "latch_cause": intent.latch_cause,
             # 3.1.1/3.1.2 read only this: without it a rollback keeps a comms latch forever.
-            "comms_latch": i.safety_latched and i.latch_cause == "comms",
+            "comms_latch": intent.safety_latched and intent.latch_cause == "comms",
             # Epoch seconds: the monotonic clock restarts with the process.
             "latch_releases": [round(wall - (now - t), 1) for t in self._releases],
             "user_time_validity_s": self._user_safety.get(REG_TIME_VALIDITY),
             "user_default_current_raw": self._user_safety.get(REG_DEFAULT_CURRENT),
         }
+
+    def export_state(self) -> dict:
+        return self._export_state(self._intent)
 
     # ── derived wire values ──────────────────────────────────────────────
     def _explicit_zero(self) -> bool:
@@ -506,16 +509,34 @@ class ChargingController:
 
     async def _update_positive(self, **changes) -> Intent:
         """``_update`` for a change that may allow more output (enable, higher
-        limit). If the save fails and output would rise, the changed fields
-        are put back (unless something newer replaced them) and the command
-        fails: unsaved permission never reaches the wire, so a restart cannot
-        disagree with what was applied. Protective changes use ``_update``."""
+        limit). Output-raising changes are persisted *before* publishing to
+        ``self._intent``, so the background refresh loop can never observe or
+        write an unsaved higher cap or enable. Protective changes use ``_update``."""
         before = self._intent
-        intent = await self._update(**changes)
-        if self._persisted or not self._raises_output(before, intent):
-            return intent
-        self._rollback(before, changes)
-        raise ControlError(self._persist_error or "change could not be saved; not applied")
+        candidate = replace(before, revision=before.revision + 1, **changes)
+        if not self._raises_output(before, candidate):
+            return await self._update(**changes)
+        saved = await self._save_state(
+            self._export_state(candidate), mark_pending=False
+        )
+        self._persisted = saved
+        if not saved:
+            raise ControlError(self._persist_error or "change could not be saved; not applied")
+        if self._intent != before:
+            # Something newer (e.g. pause or fault latch) landed while the
+            # candidate save was in flight: re-save the newer intent so disk
+            # does not hold the stale candidate, and drop this increase.
+            self._intent = replace(self._intent, revision=self._intent.revision + 1)
+            self._persisted = await self._save_intent()
+            if self._intent.safety_latched:
+                raise ControlError(self._last_error or "charger fault; output latched to zero")
+            raise _Superseded
+        self._intent = candidate
+        self._saved_revision = max(self._saved_revision, candidate.revision)
+        if self._persist_error is not None:
+            _LOGGER.info("FoxESS charging intent saving works again")
+        self._persist_pending, self._persist_error = False, None
+        return self._intent
 
     @staticmethod
     def _raises_output(before: Intent, after: Intent) -> bool:
@@ -526,15 +547,19 @@ class ChargingController:
 
         if allowed(after) > allowed(before):
             return True
-        return bool(allowed(after)) and _is_int(after.current_raw) \
-            and _is_int(before.current_raw) and after.current_raw > before.current_raw
+        if not allowed(after):
+            return False
+        if _is_int(before.current_raw) and after.current_raw is None:
+            return True
+        return _is_int(after.current_raw) and _is_int(before.current_raw) \
+            and after.current_raw > before.current_raw
 
-    async def _save_intent(self) -> bool:
-        """Persist the current intent; on failure mark it pending so the
-        refresh loop keeps retrying. Never blocks protective writes."""
+    async def _save_state(self, state: dict, *, mark_pending: bool = True) -> bool:
+        """Persist ``state``; when ``mark_pending`` is True, failures mark the
+        current intent pending so the refresh loop retries. Never blocks
+        protective writes."""
         if self._persist is None:
             return True
-        state = self.export_state()
         rev = state["revision"]
         try:
             await asyncio.wait_for(
@@ -542,16 +567,23 @@ class ChargingController:
         except Exception as err:  # noqa: BLE001 - never block protective writes
             if self._persist_error is None:   # log the first failure, not every retry
                 _LOGGER.exception("Could not persist charging intent")
-            self._persist_pending = True
+            if mark_pending:
+                self._persist_pending = True
             self._persist_error = f"intent revision {rev} not saved: {err}"
             self._counters["persist_failures"] += 1
             return False
-        self._saved_revision = max(self._saved_revision, rev)
-        if self._saved_revision >= self._intent.revision:
-            if self._persist_error is not None:
-                _LOGGER.info("FoxESS charging intent saving works again")
-            self._persist_pending, self._persist_error = False, None
+        if mark_pending:
+            self._saved_revision = max(self._saved_revision, rev)
+            if self._saved_revision >= self._intent.revision:
+                if self._persist_error is not None:
+                    _LOGGER.info("FoxESS charging intent saving works again")
+                self._persist_pending, self._persist_error = False, None
         return True
+
+    async def _save_intent(self) -> bool:
+        """Persist the current intent; on failure mark it pending so the
+        refresh loop keeps retrying. Never blocks protective writes."""
+        return await self._save_state(self.export_state(), mark_pending=True)
 
     def _require_ready(self) -> None:
         if self._closing:
@@ -859,7 +891,7 @@ class ChargingController:
                     return True
                 try:
                     await self._update_positive(enabled=True, power_raw=power)
-                except ControlError:
+                except (ControlError, _Superseded):
                     return True
                 self._spawn(self._op_apply)
             return False
@@ -1653,7 +1685,11 @@ class ChargingController:
         positive value only if a fresh observation shows an active session.
         Otherwise it is staged, and an observed finish revokes the enable."""
         before = self._intent
-        intent = await self._update_positive(**changes)
+        try:
+            intent = await self._update_positive(**changes)
+        except _Superseded:
+            self._counters["superseded"] += 1
+            return CommandResult("superseded", self._intent.revision)
         saved = self._persisted
         if intent.enabled and not (intent.stop_fallback or intent.safety_latched):
             if any(self._wire()) and not await self._run(self._op_observe):
@@ -1701,12 +1737,16 @@ class ChargingController:
                 raise ControlError("charging is off after a fault that needs a person: "
                                    "turn the charging switch on yourself in Home Assistant")
             self._released = False      # an explicit enable owns the wire again
+            try:
+                intent = await self._update_positive(
+                    enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
+                    latch_cause=None,
+                )
+            except _Superseded:
+                self._counters["superseded"] += 1
+                return CommandResult("superseded", self._intent.revision)
             self._protect.discard(_REASON_CAP_ACK)
             self._cap_zero_confirmed = False
-            intent = await self._update_positive(
-                enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
-                latch_cause=None,
-            )
             return await self._run(
                 lambda: self._op_apply(intent.revision, True, restore_hard=clear_hard)
             )
