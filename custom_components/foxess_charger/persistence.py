@@ -108,6 +108,8 @@ def protective_state(
     current_raw: int | None = None,
     revision: int = 0,
     *,
+    safety_latched: bool = False,
+    latch_cause: str | None = None,
     user_time_validity_s: int | None = None,
     user_default_current_raw: int | None = None,
 ) -> dict:
@@ -118,9 +120,11 @@ def protective_state(
         "power_raw": power_raw,
         "current_raw": current_raw,
         "revision": revision,
-        "safety_latched": False,
+        "safety_latched": safety_latched,
         "stop_fallback": False,
     }
+    if safety_latched and latch_cause is not None:
+        out["latch_cause"] = latch_cause
     if user_time_validity_s is not None:
         out["user_time_validity_s"] = user_time_validity_s
     if user_default_current_raw is not None:
@@ -158,6 +162,9 @@ class ChargerStorage:
         # acted on (e.g. a pause whose save failed).
         self._attempted: dict[str, int] = hass.data.setdefault(
             f"{DOMAIN}_attempted_revision", {}
+        )
+        self._attempted_hard: dict[str, bool] = hass.data.setdefault(
+            f"{DOMAIN}_attempted_hard", {}
         )
         self._entry_id = entry_id
 
@@ -200,8 +207,11 @@ class ChargerStorage:
                 result.controller = dict(controller)
             else:
                 issues.append("controller_state_malformed")
+                hard = self._is_hard_latch(controller)
                 result.controller = protective_state(
                     *self._salvage_limits(controller, setpoints),
+                    safety_latched=hard,
+                    latch_cause="hard" if hard else None,
                     **self._salvage_user_safety(controller),
                 )
             extra = state.get("session")
@@ -225,9 +235,15 @@ class ChargerStorage:
             and result.controller["revision"] < attempted
         ):
             issues.append("controller_state_stale")
+            hard = (
+                self._is_hard_latch(result.controller)
+                or bool(self._attempted_hard.get(self._entry_id))
+            )
             result.controller = protective_state(
                 *self._salvage_limits(result.controller, setpoints),
                 attempted + 1,
+                safety_latched=hard,
+                latch_cause="hard" if hard else None,
                 **self._salvage_user_safety(result.controller),
             )
 
@@ -238,6 +254,18 @@ class ChargerStorage:
             self._session_fields[key] = result.session.get(key)
         self._session_extra["rearm_required"] = bool(result.session.get("rearm_required", False))
         return result
+
+    @staticmethod
+    def _is_hard_latch(controller: Any) -> bool:
+        """True if ``controller`` represents a hard (or unclassified) fault latch."""
+        if not isinstance(controller, dict) or controller.get("safety_latched") is not True:
+            return False
+        cause = controller.get("latch_cause")
+        if cause in ("comms", "fault", "stop_failed"):
+            return False
+        if cause == "hard":
+            return True
+        return controller.get("comms_latch") is not True
 
     @staticmethod
     def _salvage_user_safety(controller: Any) -> dict[str, int]:
@@ -311,11 +339,24 @@ class ChargerStorage:
             issues.append("legacy_session_malformed")
         src_ctrl = state.get("controller") if isinstance(state, dict) else None
         user_safety = self._salvage_user_safety(src_ctrl)
+        hard = self._is_hard_latch(src_ctrl)
+        # A partial save (legacy written with stop_pending=True while the new
+        # state file failed or crashed) cannot be told apart from a hard latch,
+        # so fail closed: import as an unclassified latch (loads as hard).
+        partial_latch = state is not None and bool(stop_pending)
         revision = 0
         if valid_controller_state(src_ctrl):
             revision = src_ctrl["revision"] + 1
         if bad_session or bad_limits or not readable:
-            return protective_state(power, current, revision, **user_safety)
+            latched = hard or partial_latch
+            return protective_state(
+                power,
+                current,
+                revision,
+                safety_latched=latched,
+                latch_cause="hard" if hard else None,
+                **user_safety,
+            )
         # 2.4.3 leaves both stop flags false after a session ends naturally,
         # so their absence says nothing about intent. Only a session 2.4.3
         # last saw running imports as enabled; finished, idle, unknown or a
@@ -323,18 +364,22 @@ class ChargerStorage:
         # resume a finished session).
         prev = session.get("prev_status") if isinstance(session, dict) else None
         active = _is_int(prev) and prev in LEGACY_ACTIVE_STATUS
-        return {
+        latched = hard or partial_latch
+        out = {
             "schema": CONTROLLER_SCHEMA,
-            "enabled": active and not (stop_inhibit or stop_pending),
+            "enabled": False if latched else (active and not (stop_inhibit or stop_pending)),
             "power_raw": power,
             "current_raw": current,
             "revision": revision,
-            "safety_latched": False,
+            "safety_latched": latched,
             # A legacy pending Stop was sent via 0x4001: the charger may be
             # in its Stop state, which only a deliberate resume should leave.
             "stop_fallback": bool(stop_pending),
             **user_safety,
         }
+        if hard:
+            out["latch_cause"] = "hard"
+        return out
 
     @staticmethod
     def _validate_session(session: Any, issues: list[str]) -> dict:
@@ -445,8 +490,12 @@ class ChargerStorage:
         self._attempted[self._entry_id] = max(
             self._attempted.get(self._entry_id, -1), state["revision"]
         )
+        if self._is_hard_latch(state):
+            self._attempted_hard[self._entry_id] = True
         self._controller = dict(state)
         await self._async_write_all()
+        if not self._is_hard_latch(self._controller):
+            self._attempted_hard.pop(self._entry_id, None)
 
     async def async_save_session(self, fields: dict, *, rearm_required: bool) -> None:
         for key in self._session_fields:

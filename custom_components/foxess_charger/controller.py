@@ -317,6 +317,7 @@ class ChargingController:
         # Latest intent not yet durable; retried from the refresh loop.
         self._persist_pending = False
         self._persist_error: str | None = None
+        self._saved_revision = -1
         # Pause released by a confirmed unplug: see _track_unplug.
         self._released = False
         self._unplug_first: float | None = None
@@ -527,19 +528,23 @@ class ChargingController:
         refresh loop keeps retrying. Never blocks protective writes."""
         if self._persist is None:
             return True
+        state = self.export_state()
+        rev = state["revision"]
         try:
             await asyncio.wait_for(
-                self._persist(self.export_state()), self._persist_timeout)
+                self._persist(state), self._persist_timeout)
         except Exception as err:  # noqa: BLE001 - never block protective writes
             if self._persist_error is None:   # log the first failure, not every retry
                 _LOGGER.exception("Could not persist charging intent")
             self._persist_pending = True
-            self._persist_error = f"intent revision {self._intent.revision} not saved: {err}"
+            self._persist_error = f"intent revision {rev} not saved: {err}"
             self._counters["persist_failures"] += 1
             return False
-        if self._persist_error is not None:
-            _LOGGER.info("FoxESS charging intent saving works again")
-        self._persist_pending, self._persist_error = False, None
+        self._saved_revision = max(self._saved_revision, rev)
+        if self._saved_revision >= self._intent.revision:
+            if self._persist_error is not None:
+                _LOGGER.info("FoxESS charging intent saving works again")
+            self._persist_pending, self._persist_error = False, None
         return True
 
     def _require_ready(self) -> None:
@@ -898,7 +903,11 @@ class ChargingController:
 
     # ── operations (each runs as an owned task) ──────────────────────────
     async def _op_apply(
-        self, revision: int | None = None, enabling: bool = False,
+        self,
+        revision: int | None = None,
+        enabling: bool = False,
+        *,
+        restore_hard: bool = False,
     ) -> CommandResult:
         """Apply the latest intent. A command passes the revision it created: if
         intent moved on since, the latest intent is still applied (a newer
@@ -908,7 +917,7 @@ class ChargingController:
             self._busy += 1
             try:
                 overtaken = revision is not None and self._intent.revision != revision
-                result = await self._apply_locked(enabling)
+                result = await self._apply_locked(enabling, restore_hard=restore_hard)
                 if overtaken:
                     self._counters["superseded"] += 1
                     return CommandResult("superseded", self._intent.revision)
@@ -922,7 +931,9 @@ class ChargingController:
             finally:
                 self._busy -= 1
 
-    async def _apply_locked(self, enabling: bool = False) -> CommandResult:
+    async def _apply_locked(
+        self, enabling: bool = False, *, restore_hard: bool = False,
+    ) -> CommandResult:
         intent, wire = self._intent, self._wire()
         power, current = wire
         if intent.stop_fallback:
@@ -930,11 +941,20 @@ class ChargingController:
             if ev.drawing:
                 await self._stop_sequence()
             return CommandResult("confirmed", intent.revision, None)
+        if restore_hard and not (power or current):
+            # Overtaken before preflight confirmed a healthy charger frame.
+            await self._latch_fault("hard")
         if power or current:
             try:
                 await self._preflight(wire, self._clock() + self._start_timeout, enabling)
             except ControlError:
+                if restore_hard:
+                    await self._latch_fault("hard")
                 await self._revoke()
+                raise
+            except _Superseded:
+                if restore_hard:
+                    await self._latch_fault("hard")
                 raise
         self._enable_current = None
         # Only an explicit enable: later limit changes must not add a write.
@@ -1655,7 +1675,9 @@ class ChargingController:
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
                 latch_cause=None,
             )
-            return await self._run(lambda: self._op_apply(intent.revision, True))
+            return await self._run(
+                lambda: self._op_apply(intent.revision, True, restore_hard=clear_hard)
+            )
 
         return await self._command(enable)
 
