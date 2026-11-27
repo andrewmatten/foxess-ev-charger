@@ -8,7 +8,7 @@ Big review release: two independent deep-dive reviews, a council review and the 
 - A limit change can no longer send Start or arm "start on plug-in" if the car finishes or unplugs mid-write; only an explicit turn-on can.
 - Turning charging on before plugging in is no longer cancelled by a poll that lands at the moment of plug-in.
 - If no power-limit write has been acknowledged for 45 s, the protective zero now goes out in the same refresh and a healthy reading can no longer cancel it. The guard times now scale down with a shorter Command Time Validity.
-- The current limit (0x3001) refresh is now retried like the power limit; a charger that ignores it is flagged, not stopped.
+- The current limit (0x3001) refresh is now retried like the power limit; an unacknowledged or refused write while the read-back still matches is flagged (`current_cap_mismatch`) rather than stopping charging, while a persistently wrong or unreadable current read-back still latches to zero.
 - A turn-on or limit increase is saved before it is applied; if the save fails it is not applied and cannot come back after a restart. A failed save of a lower limit keeps the lower limit.
 - A hard fault latch is kept when a person's turn-on fails (charger offline) and survives failed or partial saves.
 - Setup fails closed: no power limit is written before the fallback settings are confirmed, and an unreadable limit is not treated as allowed.
