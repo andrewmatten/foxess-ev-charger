@@ -854,13 +854,12 @@ class ChargingController:
         i = self._intent
         if not i.enabled or self._explicit_zero() or i.stop_fallback or self._commands:
             return False
-        if self._session_active(ev):
-            self._await_plug = False
-            return False
         if self._await_plug:
             if ev.cc_status == 1:
                 self._await_plug = False
                 self._spawn_command(lambda: self._op_apply(enabling=True))   # the staged explicit enable
+            return False
+        if self._session_active(ev):
             return False
         self._last_error = f"session ended (status {ev.status}); enable revoked"
         _LOGGER.info("FoxESS %s", self._last_error)
