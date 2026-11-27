@@ -355,7 +355,6 @@ class ChargingController:
         self._good_first: _Evidence | None = None   # recovery candidate
         self._hold_since: float | None = None       # recovery hold start (_op_refresh)
         self._cap_at: float | None = None           # last acknowledged positive power cap write
-        self._cur_cap_at: float | None = None       # last acknowledged positive current cap write
         self._cap_zero_confirmed = False            # protective cap-ack zero confirmed on wire
         self._next_safety_try = 0.0
         # 0x3005 / 0x3006 values the user set through the number entities;
@@ -734,8 +733,6 @@ class ChargingController:
         else:
             if address == REG_MAX_CHARGING_POWER:
                 self._cap_at = self._clock() if value else None   # an acked zero cannot lapse
-            elif address == REG_MAX_CHARGING_CURRENT:
-                self._cur_cap_at = self._clock() if value else None
             return True
         return False
 
@@ -744,13 +741,10 @@ class ChargingController:
         acked = await self._send(address, value, wire)
         regs = await self._read(address)
         ok = regs is not None and regs[0] == value
-        if ok and not acked:
+        if ok and not acked and address == REG_MAX_CHARGING_POWER:
             # No reply but the read-back shows the value: a zero is in force; a
             # positive starts the cap clock if none runs, never extends one.
-            if address == REG_MAX_CHARGING_POWER:
-                self._cap_at = (self._cap_at or sent) if value else None
-            elif address == REG_MAX_CHARGING_CURRENT:
-                self._cur_cap_at = (self._cur_cap_at or sent) if value else None
+            self._cap_at = (self._cap_at or sent) if value else None
         return ok
 
     async def _write_confirmed(
@@ -1436,17 +1430,13 @@ class ChargingController:
                 self._cap_zero_confirmed = False
             wire = self._wire()
             power, current = wire
-            orig_power, orig_current = power, current
+            orig_power = power
             held = False
             if self._explicit_zero() or self._intent.stop_fallback:
-                self._cap_at = self._cur_cap_at = None
-            if orig_current is None:
-                self._cur_cap_at = None
+                self._cap_at = None
             # The positive cap in force is relied on (written or held), not zeroed.
             positive = bool(power or current)
-            session_ok = not ev.valid or self._session_active(ev)
-            power_capped = bool(orig_power) and session_ok
-            current_capped = bool(orig_current) and session_ok
+            capped = bool(orig_power) and (not ev.valid or self._session_active(ev))
             if positive and self._session_active(ev):
                 # A fresh valid active-session observation authorizes the
                 # latest revision for background refresh.
@@ -1498,7 +1488,7 @@ class ChargingController:
                     back = await self._read(address)
                     good = back is not None and back[0] == value
                     if address == REG_MAX_CHARGING_POWER and value == 0 and good:
-                        self._cap_at = self._cur_cap_at = None
+                        self._cap_at = None
                         if _REASON_CAP_ACK in self._protect:
                             self._cap_zero_confirmed = True
                     # The register already holds a refreshed cap, so its read-back
@@ -1512,7 +1502,7 @@ class ChargingController:
                     mismatched = mismatched or not good
                     lost = lost or back is None
                     if address == REG_MAX_CHARGING_CURRENT:
-                        if good:
+                        if good and (acked or not value):
                             self._degraded.discard(_DEGRADED_CURRENT)
                         else:
                             self._degraded.add(_DEGRADED_CURRENT)
@@ -1522,27 +1512,21 @@ class ChargingController:
                         self._hold_since = None  # a confirmed write ends any hold
                 if current is None:
                     self._degraded.discard(_DEGRADED_CURRENT)
-                if power_capped or current_capped:
+                if capped:
                     now = self._clock()
                     limit = self._cap_ack_limit()
-                    expired_what: str | None = None
-                    if power_capped:
-                        if self._cap_at is None:
-                            self._cap_at = now   # e.g. restored intent: count from here
-                        elif now - self._cap_at >= limit:
-                            expired_what = "power"
-                    if current_capped:
-                        if self._cur_cap_at is None:
-                            self._cur_cap_at = now
-                        elif now - self._cur_cap_at >= limit and expired_what is None:
-                            expired_what = "current"
-                    if expired_what is not None:
-                        # No acknowledged positive cap for the limit: put a
-                        # protective zero out in this same refresh instead of
+                    if self._cap_at is None:
+                        self._cap_at = now   # e.g. restored intent: count from here
+                    elif now - self._cap_at >= limit:
+                        # No acknowledged positive power cap for the limit: put
+                        # a protective zero out in this same refresh instead of
                         # deferring to the retry (where healthy polls could
                         # otherwise clear telemetry protection before zero lands).
+                        # Missing 0x3001 acks alone stay degraded/retried rather
+                        # than zeroing power, so units refusing 0x3001 keep
+                        # charging under the refreshed 0x3002 cap.
                         self._last_error = (
-                            f"no acknowledged {expired_what} cap write for {limit:g} s")
+                            f"no acknowledged power cap write for {limit:g} s")
                         self._protect.add(_REASON_CAP_ACK)
                         self._cap_zero_confirmed = False
                         self._authorized = None
@@ -1551,7 +1535,7 @@ class ChargingController:
                         back = await self._read(REG_MAX_CHARGING_POWER)
                         good = back is not None and back[0] == 0
                         if good:
-                            self._cap_at = self._cur_cap_at = None
+                            self._cap_at = None
                             self._cap_zero_confirmed = True
                         seen = True
                         mismatched = not good

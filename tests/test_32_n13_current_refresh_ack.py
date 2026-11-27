@@ -1,4 +1,4 @@
-"""3.2 N13: 0x3001 (current) refresh gets the same ack/retry and cap-ack protection as 0x3002."""
+"""3.2 N13: 0x3001 (current) refresh retries on missing ack and flags degraded without zeroing power."""
 from __future__ import annotations
 
 import pytest
@@ -35,19 +35,19 @@ async def test_unacknowledged_current_refresh_retries_at_retry_interval(rigs, mo
     assert rig.sim.state == CHARGING and ctl.phase == "enabled"
 
 
-async def test_sustained_unacknowledged_current_refresh_writes_protective_zero():
-    """If 0x3001 goes unacknowledged for CAP_ACK_LIMIT_S while 0x3002 succeeds,
-    the controller must write protective 0x3002 = 0 in that same refresh."""
+async def test_sustained_unacknowledged_current_refresh_flags_degraded_without_zeroing_power():
+    """If 0x3001 goes unacknowledged past CAP_ACK_LIMIT_S while 0x3002 succeeds,
+    the controller retries and flags degraded rather than writing a zero power cap."""
     c, io = await make(saved(power=70, current=100), retry_interval=3.0)
     io.lose_reply.add(CUR)
     io.clock.now += CAP_ACK_LIMIT_S + 1
 
     ok = await c._op_refresh()
     assert not ok
-    assert 0 in io.power_writes()
-    assert io.regs[POW] == 0
-    assert c.phase == "uncertain"
-    assert "current cap" in (c.diagnostics["last_error"] or "")
+    assert 0 not in io.power_writes()
+    assert io.regs[POW] == 70
+    assert c.phase == "enabled"
+    assert "current_cap_mismatch" in c.diagnostics["degraded_reasons"]
 
 
 async def test_power_only_refresh_does_not_trip_current_cap_guard():
