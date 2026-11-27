@@ -541,6 +541,31 @@ class ChargingController:
         task.add_done_callback(lambda t: t.cancelled() or t.exception())
         return task
 
+    def _dec_commands(self) -> None:
+        self._commands -= 1
+
+    def _spawn_command(self, factory: Callable[[], Awaitable[Any]]) -> asyncio.Task:
+        """Spawn an explicit command, counting it synchronously before yielding
+        so queued observations cannot revoke the enable before it starts."""
+        self._commands += 1
+        started = False
+
+        async def run() -> Any:
+            nonlocal started
+            started = True
+            try:
+                return await factory()
+            finally:
+                self._commands -= 1
+
+        try:
+            task = self._spawn(run)
+        except BaseException:
+            self._commands -= 1
+            raise
+        task.add_done_callback(lambda _t: None if started else self._dec_commands())
+        return task
+
     async def _run(self, factory: Callable[[], Awaitable[Any]]) -> Any:
         """Run controller work so that cancelling the caller cannot abort it."""
         return await asyncio.shield(self._spawn(factory))
@@ -715,7 +740,7 @@ class ChargingController:
         if self._await_plug:
             if ev.cc_status == 1:
                 self._await_plug = False
-                self._spawn(lambda: self._op_apply(enabling=True))   # the staged explicit enable
+                self._spawn_command(lambda: self._op_apply(enabling=True))   # the staged explicit enable
             return False
         self._last_error = f"session ended (status {ev.status}); enable revoked"
         _LOGGER.info("FoxESS %s", self._last_error)
