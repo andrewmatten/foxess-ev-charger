@@ -43,6 +43,7 @@ POWER_RAW_MAX = 220
 # 2.4.3 prev_status values that mean a session was genuinely running.
 LEGACY_ACTIVE_STATUS = (2, 3, 4)
 CURRENT_RAW_RANGE = (60, 320)
+TIME_VALIDITY_RANGE = (1, 3600)
 
 
 def state_key(entry_id: str) -> str:
@@ -94,10 +95,16 @@ def valid_controller_state(state: Any) -> bool:
     return True
 
 
-def protective_state(power_raw: int | None = None, current_raw: int | None = None,
-                     revision: int = 0) -> dict:
+def protective_state(
+    power_raw: int | None = None,
+    current_raw: int | None = None,
+    revision: int = 0,
+    *,
+    user_time_validity_s: int | None = None,
+    user_default_current_raw: int | None = None,
+) -> dict:
     """Paused intent that keeps whichever limits are still trustworthy."""
-    return {
+    out: dict[str, Any] = {
         "schema": CONTROLLER_SCHEMA,
         "enabled": False,
         "power_raw": power_raw,
@@ -106,6 +113,11 @@ def protective_state(power_raw: int | None = None, current_raw: int | None = Non
         "safety_latched": False,
         "stop_fallback": False,
     }
+    if user_time_validity_s is not None:
+        out["user_time_validity_s"] = user_time_validity_s
+    if user_default_current_raw is not None:
+        out["user_default_current_raw"] = user_default_current_raw
+    return out
 
 
 @dataclass
@@ -180,7 +192,8 @@ class ChargerStorage:
             else:
                 issues.append("controller_state_malformed")
                 result.controller = protective_state(
-                    *self._salvage_limits(controller, setpoints)
+                    *self._salvage_limits(controller, setpoints),
+                    **self._salvage_user_safety(controller),
                 )
             extra = state.get("session")
             if isinstance(extra, dict) and isinstance(extra.get("rearm_required"), bool):
@@ -204,7 +217,9 @@ class ChargerStorage:
         ):
             issues.append("controller_state_stale")
             result.controller = protective_state(
-                *self._salvage_limits(result.controller, setpoints), attempted + 1
+                *self._salvage_limits(result.controller, setpoints),
+                attempted + 1,
+                **self._salvage_user_safety(result.controller),
             )
 
         if issues:
@@ -214,6 +229,22 @@ class ChargerStorage:
             self._session_fields[key] = result.session.get(key)
         self._session_extra["rearm_required"] = bool(result.session.get("rearm_required", False))
         return result
+
+    @staticmethod
+    def _salvage_user_safety(controller: Any) -> dict[str, int]:
+        """Carry over valid user-set 0x3005/0x3006 values (re-validated by controller)."""
+        out: dict[str, int] = {}
+        if not isinstance(controller, dict):
+            return out
+        tv = controller.get("user_time_validity_s")
+        t_lo, t_hi = TIME_VALIDITY_RANGE
+        if _is_int(tv) and t_lo <= tv <= t_hi:
+            out["user_time_validity_s"] = tv
+        dc = controller.get("user_default_current_raw")
+        c_lo, c_hi = CURRENT_RAW_RANGE
+        if _is_int(dc) and c_lo <= dc <= c_hi:
+            out["user_default_current_raw"] = dc
+        return out
 
     @staticmethod
     def _salvage_limits(controller: Any, setpoints: Any) -> tuple[int | None, int | None]:
@@ -269,11 +300,13 @@ class ChargerStorage:
                     bad_session = True
         if bad_session:
             issues.append("legacy_session_malformed")
+        src_ctrl = state.get("controller") if isinstance(state, dict) else None
+        user_safety = self._salvage_user_safety(src_ctrl)
         revision = 0
-        if isinstance(state, dict) and valid_controller_state(state.get("controller")):
-            revision = state["controller"]["revision"] + 1
+        if valid_controller_state(src_ctrl):
+            revision = src_ctrl["revision"] + 1
         if bad_session or bad_limits or not readable:
-            return protective_state(power, current, revision)
+            return protective_state(power, current, revision, **user_safety)
         # 2.4.3 leaves both stop flags false after a session ends naturally,
         # so their absence says nothing about intent. Only a session 2.4.3
         # last saw running imports as enabled; finished, idle, unknown or a
@@ -291,6 +324,7 @@ class ChargerStorage:
             # A legacy pending Stop was sent via 0x4001: the charger may be
             # in its Stop state, which only a deliberate resume should leave.
             "stop_fallback": bool(stop_pending),
+            **user_safety,
         }
 
     @staticmethod
