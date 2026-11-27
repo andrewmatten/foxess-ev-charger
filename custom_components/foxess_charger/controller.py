@@ -152,6 +152,7 @@ WORK_MODE_ERRORS = {
 }
 
 _REASON_TELEMETRY = "telemetry_uncertain"
+_REASON_CAP_ACK = "cap_ack_timeout"
 _REASON_SAFETY = "safety_config_unconfirmed"
 _DEGRADED_CURRENT = "current_cap_mismatch"
 
@@ -307,6 +308,7 @@ class ChargingController:
         self._good_first: _Evidence | None = None   # recovery candidate
         self._hold_since: float | None = None       # recovery hold start (_op_refresh)
         self._cap_at: float | None = None           # last acknowledged positive cap write
+        self._cap_zero_confirmed = False            # protective cap-ack zero confirmed on wire
         self._next_safety_try = 0.0
         # 0x3005 / 0x3006 values the user set through the number entities;
         # setup re-asserts these and uses 60 s / 6 A only where none was set.
@@ -383,7 +385,7 @@ class ChargingController:
             return "faulted"
         if i.stop_fallback:
             return "stopped"
-        if _REASON_TELEMETRY in self._protect:
+        if _REASON_TELEMETRY in self._protect or _REASON_CAP_ACK in self._protect:
             return "uncertain"
         if self._busy:
             return "applying"
@@ -466,6 +468,18 @@ class ChargingController:
         if self._explicit_zero() or self._protect:
             return 0, None
         return i.power_raw, i.current_raw
+
+    def _effective_validity(self) -> float:
+        v = self._validity
+        if _is_int(v) and v > 0:
+            return float(min(v, FIRMWARE_EXPIRY_S))
+        return float(FIRMWARE_EXPIRY_S)
+
+    def _cap_ack_limit(self) -> float:
+        return self._effective_validity() * CAP_ACK_LIMIT_S / FIRMWARE_EXPIRY_S
+
+    def _telemetry_grace(self) -> float:
+        return self._grace * self._effective_validity() / FIRMWARE_EXPIRY_S
 
     def _refresh_interval(self) -> float:
         v = self._validity
@@ -669,7 +683,7 @@ class ChargingController:
             self._bad_count += 1
             if self._bad_since is None:
                 self._bad_since = ev.at
-            if self._bad_count >= 2 and ev.at - self._bad_since >= self._grace:
+            if self._bad_count >= 2 and ev.at - self._bad_since >= self._telemetry_grace():
                 self._protect.add(_REASON_TELEMETRY)
         return before != (_REASON_TELEMETRY in self._protect)
 
@@ -854,8 +868,7 @@ class ChargingController:
             self._mismatch_since = self._clock()
 
     def _mismatch_persistent(self) -> bool:
-        window = min(self._validity, FIRMWARE_EXPIRY_S) if (
-            _is_int(self._validity) and self._validity > 0) else FIRMWARE_EXPIRY_S
+        window = self._effective_validity()
         return (
             self._mismatch_count >= 2
             and self._clock() - self._mismatch_since >= window
@@ -950,7 +963,11 @@ class ChargingController:
             pause_deadline = self._clock() + self._pause_timeout
             if await self._await_evidence(ok, wire, pause_deadline) is None:
                 await self._stop_sequence()
+                self._protect.discard(_REASON_CAP_ACK)
+                self._cap_zero_confirmed = False
                 return CommandResult("confirmed", self._intent.revision, None)
+            self._protect.discard(_REASON_CAP_ACK)
+            self._cap_zero_confirmed = False
         elif power or current:     # None = nothing written: never confirm (or Start) a session
             try:
                 started = await self._confirm_session(
@@ -1253,6 +1270,13 @@ class ChargingController:
             regs = await self._read(REG_TIME_VALIDITY)
             if regs is not None:
                 self._set_validity(regs[0])
+            if _REASON_CAP_ACK in self._protect and (
+                self._explicit_zero()
+                or self._intent.stop_fallback
+                or (ev.valid and self._cap_zero_confirmed)
+            ):
+                self._protect.discard(_REASON_CAP_ACK)
+                self._cap_zero_confirmed = False
             wire = self._wire()
             power, current = wire
             held = False
@@ -1281,7 +1305,10 @@ class ChargingController:
                 and not (self._explicit_zero() or self._intent.stop_fallback or self._released)
                 and (self._intent.power_raw or 0) >= MIN_ENABLE_POWER_RAW
                 and self._session_active(ev)
-                and (self._hold_since is None or self._clock() - self._hold_since < self._grace)
+                and (
+                    self._hold_since is None
+                    or self._clock() - self._hold_since < self._telemetry_grace()
+                )
             ):
                 # Link back: this fresh frame shows the session still running,
                 # but the telemetry protect lifts only on the next agreeing
@@ -1308,6 +1335,10 @@ class ChargingController:
                     acked = await self._send(address, value, wire)
                     back = await self._read(address)
                     good = back is not None and back[0] == value
+                    if address == REG_MAX_CHARGING_POWER and value == 0 and good:
+                        self._cap_at = None
+                        if _REASON_CAP_ACK in self._protect:
+                            self._cap_zero_confirmed = True
                     # The register already holds a refreshed cap, so its read-back
                     # cannot prove this write landed: without an ack, retry soon.
                     # Mismatch tracking stays read-back only, so a lossy link
@@ -1331,18 +1362,31 @@ class ChargingController:
                     self._degraded.discard(_DEGRADED_CURRENT)
                 if capped:
                     now = self._clock()
+                    limit = self._cap_ack_limit()
                     if self._cap_at is None:
                         self._cap_at = now   # e.g. restored intent: count from here
-                    elif now - self._cap_at >= CAP_ACK_LIMIT_S:
-                        # Same protective zero as an expired telemetry grace,
-                        # and the same recovery; the recovery hold is skipped
-                        # so the zero goes out on the retry.
+                    elif now - self._cap_at >= limit:
+                        # No acknowledged positive cap for the limit: put a
+                        # protective zero out in this same refresh instead of
+                        # deferring to the retry (where healthy polls could
+                        # otherwise clear telemetry protection before zero lands).
                         self._last_error = (
-                            f"no acknowledged power cap write for {CAP_ACK_LIMIT_S} s")
-                        self._protect.add(_REASON_TELEMETRY)
-                        self._good_first = None
-                        self._hold_since = now - self._grace
+                            f"no acknowledged power cap write for {limit:g} s")
+                        self._protect.add(_REASON_CAP_ACK)
+                        self._cap_zero_confirmed = False
+                        self._authorized = None
                         ok = False
+                        await self._send(REG_MAX_CHARGING_POWER, 0, None)
+                        back = await self._read(REG_MAX_CHARGING_POWER)
+                        good = back is not None and back[0] == 0
+                        if good:
+                            self._cap_at = None
+                            self._cap_zero_confirmed = True
+                        seen = True
+                        mismatched = not good
+                        lost = back is None
+                        power = 0
+                        self._note_readback(mismatched)
             except _Superseded:
                 self._counters["superseded"] += 1
                 ok = True  # the newer command writes its own value
@@ -1605,6 +1649,8 @@ class ChargingController:
                 raise ControlError("charging is off after a fault that needs a person: "
                                    "turn the charging switch on yourself in Home Assistant")
             self._released = False      # an explicit enable owns the wire again
+            self._protect.discard(_REASON_CAP_ACK)
+            self._cap_zero_confirmed = False
             intent = await self._update_positive(
                 enabled=True, power_raw=power, safety_latched=False, stop_fallback=False,
                 latch_cause=None,
@@ -1699,7 +1745,9 @@ class ChargingController:
                 self._counters["refresh_failures"] += 1
                 ok = False
             while (remaining := started + (
-                self._refresh_interval() if ok else self._retry) - self._clock()) > 0:
+                self._refresh_interval()
+                if ok else min(self._retry, self._refresh_interval())
+            ) - self._clock()) > 0:
                 if not await self._sleep_or_wake(remaining):
                     break
 
