@@ -14,7 +14,13 @@ import logging
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower, UnitOfTime
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -97,6 +103,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     FoxESSNumberEntityDescription(
         key="allowed_charge_time",
         translation_key="allowed_charge_time", icon="mdi:timer",
+        entity_category=EntityCategory.CONFIG,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=0, native_max_value=1440, native_step=1,
         register=REG_ALLOWED_CHARGE_TIME, reading_key="allowed_charge_time",
@@ -105,6 +112,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     FoxESSNumberEntityDescription(
         key="allowed_charge_energy",
         translation_key="allowed_charge_energy", icon="mdi:battery-charging",
+        entity_category=EntityCategory.CONFIG,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         native_min_value=0, native_max_value=999, native_step=1,
         register=REG_ALLOWED_CHARGE_ENERGY, reading_key="allowed_charge_energy",
@@ -113,6 +121,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     FoxESSNumberEntityDescription(
         key="time_validity",
         translation_key="time_validity", icon="mdi:clock-outline",
+        entity_category=EntityCategory.CONFIG,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         # The protocol documents 10-60 s, but the charger reports and accepts
         # 180. The UI allows up to 255 (one byte) so it can show what the
@@ -124,6 +133,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     FoxESSNumberEntityDescription(
         key="default_current",
         translation_key="default_current", icon="mdi:current-ac",
+        entity_category=EntityCategory.CONFIG,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         native_min_value=6.0, native_max_value=32.0, native_step=0.1,
         register=REG_DEFAULT_CURRENT, reading_key="default_current_raw",
@@ -132,6 +142,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     FoxESSNumberEntityDescription(
         key="min_switch_interval",
         translation_key="min_switch_interval", icon="mdi:timer-sand",
+        entity_category=EntityCategory.CONFIG,
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=5, native_max_value=30, native_step=1,
         register=REG_MIN_SWITCH_INTERVAL, reading_key="min_switch_interval",

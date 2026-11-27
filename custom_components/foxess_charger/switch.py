@@ -12,6 +12,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -148,6 +149,7 @@ class FoxESSLockSwitch(_ControllerSwitch):
         key="lock",
         translation_key="lock",
         icon="mdi:lock",
+        entity_category=EntityCategory.CONFIG,
     )
     _block = BLOCK_STATUS
 
@@ -179,6 +181,7 @@ class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
         key="auto_phase_switch",
         translation_key="auto_phase_switch",
         icon="mdi:auto-fix",
+        entity_category=EntityCategory.CONFIG,
         entity_registry_enabled_default=False,
     )
     _block = BLOCK_PHASE_BOX
