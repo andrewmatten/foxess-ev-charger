@@ -1871,9 +1871,13 @@ class ChargingController:
             if address in (REG_TIME_VALIDITY, REG_DEFAULT_CURRENT):
                 # The user's choice: re-asserted on every setup from now on.
                 self._user_safety[address] = value
-                self._persisted = await self._save_intent()
             self._counters["confirmations"] += 1
-            return CommandResult("confirmed", self._intent.revision, observed)
+            result = CommandResult("confirmed", self._intent.revision, observed)
+        if address in (REG_TIME_VALIDITY, REG_DEFAULT_CURRENT):
+            self._persisted = await self._save_intent()
+            if not self._persisted:
+                raise ControlError("applied but not saved")
+        return result
 
     async def async_start(self) -> None:
         """Start the background refresh loop."""
