@@ -23,7 +23,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import (
     FoxESSBlockAvailabilityMixin,
     FoxESSChargerCoordinator,
-    FoxESSLongContextMixin,
+    FoxESSServiceContextMixin,
     build_device_info,
 )
 from .adapter_api import CONFIRMED, ControlError
@@ -154,7 +154,7 @@ async def async_setup_entry(
 
 
 class FoxESSNumber(
-    FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity,
+    FoxESSServiceContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity,
 ):
     """A charger setting, changed only through the controller."""
 
@@ -233,6 +233,7 @@ class FoxESSNumber(
         }
 
     async def async_set_native_value(self, value: float) -> None:
+        context = self._take_service_context()
         description = self.entity_description
         raw = description.to_raw(value)
         controller = self.coordinator.controller
@@ -252,5 +253,11 @@ class FoxESSNumber(
             "%s set to %s (register value %d): %s",
             description.key, value, raw, self._last_outcome,
         )
-        await self.coordinator.async_refresh()
-        self.async_write_ha_state()
+        self._applying_service_context = context
+        try:
+            self._restore_service_context(context)
+            await self.coordinator.async_refresh()
+            self._restore_service_context(context)
+            self.async_write_ha_state()
+        finally:
+            self._applying_service_context = None

@@ -20,7 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import (
     FoxESSBlockAvailabilityMixin,
     FoxESSChargerCoordinator,
-    FoxESSLongContextMixin,
+    FoxESSServiceContextMixin,
     build_device_info,
 )
 from .adapter_api import CONFIRMED, ControlError
@@ -52,8 +52,11 @@ async def async_setup_entry(
     )
 
 
+_UNSET = object()
+
+
 class _ControllerSwitch(
-    FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity,
+    FoxESSServiceContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity,
 ):
     """Shared plumbing: identity, and running a controller command."""
 
@@ -65,15 +68,24 @@ class _ControllerSwitch(
         self._attr_unique_id = f"{entry.entry_id}_{self.entity_description.key}"
         self._attr_device_info = build_device_info(entry, coordinator)
 
-    async def _async_command(self, command: Awaitable[Any], action: str) -> Any:
+    async def _async_command(
+        self, command: Awaitable[Any], action: str, *, context: Any = _UNSET,
+    ) -> Any:
         """Await a controller command, then refresh and publish the state.
         ``action`` completes the error message ("failed to <action>")."""
+        ctx = self._take_service_context() if context is _UNSET else context
         try:
             result = await command
         except ControlError as err:
             raise HomeAssistantError(f"FoxESS: failed to {action}: {err}") from err
-        await self.coordinator.async_refresh()
-        self.async_write_ha_state()
+        self._applying_service_context = ctx
+        try:
+            self._restore_service_context(ctx)
+            await self.coordinator.async_refresh()
+            self._restore_service_context(ctx)
+            self.async_write_ha_state()
+        finally:
+            self._applying_service_context = None
         return result
 
 
@@ -111,11 +123,13 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     async def async_turn_on(self, **kwargs: Any) -> None:
         # A hard latch needs a person (a call with a user, not an automation)
         # who could already see it in Home Assistant.
-        person = self._context is not None and self._context.user_id is not None
+        context = self._take_service_context()
+        person = context is not None and context.user_id is not None
         shown = (self.coordinator.data or {}).get("needs_human") is True
         await self._async_command(
             self.coordinator.controller.async_enable(clear_hard=person and shown),
             "start charging",
+            context=context,
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:

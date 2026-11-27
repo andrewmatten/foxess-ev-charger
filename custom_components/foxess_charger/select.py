@@ -12,7 +12,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import FoxESSBlockAvailabilityMixin, FoxESSChargerCoordinator, build_device_info
+from . import (
+    FoxESSBlockAvailabilityMixin,
+    FoxESSChargerCoordinator,
+    FoxESSServiceContextMixin,
+    build_device_info,
+)
 from .adapter_api import ControlError
 from .const import (
     BLOCK_CONFIG,
@@ -39,7 +44,9 @@ async def async_setup_entry(
     )
 
 
-class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, SelectEntity):
+class _EnumRegisterSelect(
+    FoxESSServiceContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SelectEntity,
+):
     """Select over one enum register.
 
     Subclasses provide the entity description, the code table (raw value ->
@@ -66,6 +73,7 @@ class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Selec
         return decode_enum(raw, self._codes, self._reading_key)
 
     async def async_select_option(self, option: str) -> None:
+        context = self._take_service_context()
         try:
             await self.coordinator.controller.async_set_register(
                 self._register, self._raw_for_option[option]
@@ -75,8 +83,14 @@ class _EnumRegisterSelect(FoxESSBlockAvailabilityMixin, CoordinatorEntity, Selec
             raise HomeAssistantError(
                 f"FoxESS: failed to set {label} to {option}: {err}"
             ) from err
-        await self.coordinator.async_refresh()
-        self.async_write_ha_state()
+        self._applying_service_context = context
+        try:
+            self._restore_service_context(context)
+            await self.coordinator.async_refresh()
+            self._restore_service_context(context)
+            self.async_write_ha_state()
+        finally:
+            self._applying_service_context = None
 
 
 class FoxESSWorkModeSelect(_EnumRegisterSelect):
