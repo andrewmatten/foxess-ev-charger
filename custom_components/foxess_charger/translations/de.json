@@ -9,6 +9,15 @@
           "port": "Modbus-TCP-Port",
           "slave_id": "Modbus-Unit-ID (Slave-ID)"
         }
+      },
+      "reconfigure": {
+        "title": "Charger-Adresse ändern",
+        "description": "Ändern, wo der Charger im Netzwerk erreichbar ist. Er muss auf Modbus-TCP-Anfragen von Home Assistant antworten.",
+        "data": {
+          "host": "IP-Adresse oder Hostname des Chargers",
+          "port": "Modbus-TCP-Port",
+          "slave_id": "Modbus-Unit-ID (Slave-ID)"
+        }
       }
     },
     "error": {
@@ -16,7 +25,8 @@
       "unknown": "Unerwarteter Fehler, Details stehen im Log."
     },
     "abort": {
-      "already_configured": "Dieser Charger ist bereits eingerichtet."
+      "already_configured": "Dieser Charger ist bereits eingerichtet.",
+      "reconfigure_successful": "Die Verbindung zum Charger wurde aktualisiert"
     }
   },
   "options": {
