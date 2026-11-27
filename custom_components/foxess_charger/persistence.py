@@ -17,6 +17,7 @@ protective paused intent rather than guessing.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import logging
 import math
@@ -149,6 +150,7 @@ class ChargerStorage:
         self._session_fields: dict = {f: None for f in SESSION_FIELDS[:4]}
         self._session_extra: dict = {"rearm_required": False}
         self._written: dict[str, Any] = {}
+        self._write_lock = asyncio.Lock()
         # Highest controller revision this HA process tried to save for the
         # entry. It outlives the entry (reloads), so a reload can tell that
         # the record on disk is older than intent the controller already
@@ -416,18 +418,23 @@ class ChargerStorage:
     async def _async_write_all(self) -> None:
         # Legacy files first: if the new file then fails to save, the next
         # load sees a fingerprint mismatch and imports the (newer) legacy
-        # projection instead of an older controller state.
-        session = self._legacy_session_payload()
-        setpoints = self._legacy_setpoints_payload()
-        await self._save("session", self._session_store, session)
-        await self._save("setpoints", self._setpoints_store, setpoints)
-        if self._controller is None:
-            return
-        await self._save("state", self._state_store, {
-            "controller": dict(self._controller),
-            "session": dict(self._session_extra),
-            "legacy_fingerprint": {"session": session, "setpoints": setpoints},
-        })
+        # projection instead of an older controller state. Serialized so
+        # concurrent controller and session saves cannot interleave and leave
+        # a mismatched legacy_fingerprint on disk.
+        async with self._write_lock:
+            session = self._legacy_session_payload()
+            setpoints = self._legacy_setpoints_payload()
+            controller = dict(self._controller) if self._controller is not None else None
+            session_extra = dict(self._session_extra)
+            await self._save("session", self._session_store, session)
+            await self._save("setpoints", self._setpoints_store, setpoints)
+            if controller is None:
+                return
+            await self._save("state", self._state_store, {
+                "controller": controller,
+                "session": session_extra,
+                "legacy_fingerprint": {"session": session, "setpoints": setpoints},
+            })
 
     async def async_save_controller(self, state: dict) -> None:
         """Persist callback handed to the controller. Raises on failure so
