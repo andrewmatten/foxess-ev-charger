@@ -25,7 +25,13 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, ENERGY_GUARDS, REG_MAX_CHARGING_CURRENT, REG_MAX_CHARGING_POWER
+from .const import (
+    DOMAIN,
+    ENERGY_GUARDS,
+    REG_MAX_CHARGING_CURRENT,
+    REG_MAX_CHARGING_POWER,
+    USER_TIME_VALIDITY_RANGE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +49,7 @@ POWER_RAW_MAX = 220
 # 2.4.3 prev_status values that mean a session was genuinely running.
 LEGACY_ACTIVE_STATUS = (2, 3, 4)
 CURRENT_RAW_RANGE = (60, 320)
-TIME_VALIDITY_RANGE = (1, 3600)
+TIME_VALIDITY_RANGE = USER_TIME_VALIDITY_RANGE
 
 
 def state_key(entry_id: str) -> str:

@@ -325,6 +325,8 @@ DEFAULT_TIME_VALIDITY = 60  # seconds
 # 0x3001/0x3002 to maximum ~60s after each write (seen as a ~91s power
 # sawtooth). Never trust the register beyond this.
 FIRMWARE_MAX_TIME_VALIDITY = 60  # seconds
+# Range accepted by the Command Time Validity number entity (and on restore).
+USER_TIME_VALIDITY_RANGE = (10, 255)
 
 
 # ── Energy plausibility guard ────────────────────────────────────────────────

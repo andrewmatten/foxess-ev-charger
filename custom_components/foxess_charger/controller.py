@@ -55,6 +55,7 @@ from .const import (
     REG_STATUS_BLOCK_START,
     REG_TIME_VALIDITY,
     REG_WORK_MODE,
+    USER_TIME_VALIDITY_RANGE,
     WORK_MODE_MAP,
 )
 
@@ -128,6 +129,13 @@ REGISTER_ALLOWLIST: dict[int, tuple[int, int]] = {
     REG_AUTO_PHASE_SWITCH: (0, 1),
     REG_MIN_SWITCH_INTERVAL: (5, 30),
     REG_PHASE_SWITCHING: (0, 2),
+}
+
+# Bounds accepted when restoring user-chosen safety settings from storage
+# (match the number entities: 10-255 s for 0x3005, 6-32 A for 0x3006).
+USER_SAFETY_RANGES: dict[int, tuple[int, int]] = {
+    REG_TIME_VALIDITY: USER_TIME_VALIDITY_RANGE,
+    REG_DEFAULT_CURRENT: (MIN_CURRENT_RAW, MAX_CURRENT_RAW),
 }
 
 # Write-only command registers: (status register proving it, expected value).
@@ -1373,7 +1381,7 @@ class ChargingController:
                     saved, self._wall(), self._clock(), saved.get("safety_latched") is True)
                 for reg, key in ((REG_TIME_VALIDITY, "user_time_validity_s"),
                                  (REG_DEFAULT_CURRENT, "user_default_current_raw")):
-                    v, (lo, hi) = saved.get(key), REGISTER_ALLOWLIST[reg]
+                    v, (lo, hi) = saved.get(key), USER_SAFETY_RANGES[reg]
                     if _is_int(v) and lo <= v <= hi:   # anything else: safe default
                         self._user_safety[reg] = v
             parsed = _parse_saved(saved)
