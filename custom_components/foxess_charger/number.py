@@ -256,6 +256,7 @@ class FoxESSNumber(
             else:
                 result = await controller.async_set_register(description.register, raw)
         except (ControlError, ValueError) as err:  # ValueError: controller rejected the value
+            await self.coordinator.async_request_refresh()
             raise HomeAssistantError(
                 f"FoxESS: could not set {description.key} to {value}: {err}"
             ) from err

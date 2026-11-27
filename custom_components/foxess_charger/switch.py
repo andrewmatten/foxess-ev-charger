@@ -78,6 +78,7 @@ class _ControllerSwitch(
         try:
             result = await command
         except ControlError as err:
+            await self.coordinator.async_request_refresh()
             raise HomeAssistantError(f"FoxESS: failed to {action}: {err}") from err
         self._applying_service_context = ctx
         try:
@@ -124,13 +125,15 @@ class FoxESSChargingSwitch(_ControllerSwitch):
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        # A hard latch needs a person (a call with a user, not an automation)
-        # who could already see it in Home Assistant.
+        # A hard latch needs a person (a call with a user, not an automation).
+        # Read needs_human live from the controller, matching is_on and
+        # extra_state_attributes rather than possibly stale coordinator.data.
         context = self._take_service_context()
         person = context is not None and context.user_id is not None
-        shown = (self.coordinator.data or {}).get("needs_human") is True
+        controller = self.coordinator.controller
+        clear_hard = person and bool(getattr(controller, "needs_human", False))
         await self._async_command(
-            self.coordinator.controller.async_enable(clear_hard=person and shown),
+            controller.async_enable(clear_hard=clear_hard),
             "start charging",
             context=context,
         )
