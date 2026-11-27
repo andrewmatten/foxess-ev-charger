@@ -1062,17 +1062,32 @@ class ChargingController:
                 await self._sleep(POLL_STEP_S)
         if restore_hard and not (power or current):
             # Overtaken before preflight confirmed a healthy charger frame.
+            if self._worse("hard"):
+                self._last_error = (
+                    "hard fault latch restored: enable overtaken before charger confirmed healthy"
+                )
             await self._latch_fault("hard")
         if power or current:
             try:
                 await self._preflight(wire, self._clock() + self._start_timeout, enabling)
-            except ControlError:
+            except ControlError as err:
+                if restore_hard and self._worse("hard"):
+                    msg = f"hard fault latch restored: {err}"
+                    self._last_error = msg
+                    await self._latch_fault("hard")
+                    await self._revoke()
+                    raise ControlError(msg) from err
                 if restore_hard:
                     await self._latch_fault("hard")
                 await self._revoke()
                 raise
             except _Superseded:
                 if restore_hard:
+                    if self._worse("hard"):
+                        self._last_error = (
+                            "hard fault latch restored: enable overtaken before charger "
+                            "confirmed healthy"
+                        )
                     await self._latch_fault("hard")
                 raise
         self._enable_current = None
