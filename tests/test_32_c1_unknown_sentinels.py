@@ -97,10 +97,10 @@ async def test_sentinel_frame_does_not_fire_fault_or_alarm_device_triggers(
         fault_calls = AsyncMock()
         alarm_calls = AsyncMock()
         unsub_fault = await async_attach_trigger(
-            hass, by_type["fault"], fault_calls, {"trigger_data": {"id": "f"}}
+            hass, by_type["fault"], fault_calls, {"domain": DOMAIN, "name": "sentinel", "home_assistant_start": False, "variables": {}, "trigger_data": {"id": "f"}}
         )
         unsub_alarm = await async_attach_trigger(
-            hass, by_type["alarm"], alarm_calls, {"trigger_data": {"id": "a"}}
+            hass, by_type["alarm"], alarm_calls, {"domain": DOMAIN, "name": "sentinel", "home_assistant_start": False, "variables": {}, "trigger_data": {"id": "a"}}
         )
         try:
             coordinator = hass.data[DOMAIN][ENTRY_ID]["coordinator"]

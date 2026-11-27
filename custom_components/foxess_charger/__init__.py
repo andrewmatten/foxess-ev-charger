@@ -66,7 +66,7 @@ def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator)
 class FoxESSServiceContextMixin:
     """Preserve the service-call context across slow charger confirmation
     using public Entity.async_set_context() rather than mutating private
-    Entity._context_set or reading private Entity._context.
+    Entity context attributes.
     """
 
     _pending_service_context: Context | None = None
