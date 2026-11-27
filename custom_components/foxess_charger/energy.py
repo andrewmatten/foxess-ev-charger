@@ -151,7 +151,7 @@ class EnergyTracker:
                         "corruption, not real charging", key, elapsed, total_kwh,
                     )
                     self._reject(key, prev, raw, decision)
-                    self._window[key] = []
+                    window.pop()
                     return None
 
         if prev_entry is None or prev_entry[0] != raw:
