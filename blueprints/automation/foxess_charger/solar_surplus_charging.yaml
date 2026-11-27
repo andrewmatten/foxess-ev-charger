@@ -334,8 +334,16 @@ action:
                       - "{{ not state_attr(charging_switch, 'needs_human') }}"
                       - "{{ not state_attr(charging_switch, 'latch_cause') }}"
                     sequence:
+                      # Stage entity_min unless the controller's saved desired
+                      # current already equals it: with no saved current, the
+                      # number displays the hardware reading (e.g. 6 A), and
+                      # skipping set_value lets turn_on write rated current.
                       - if:
-                          - "{{ current_amps != entity_min }}"
+                          - condition: template
+                            value_template: >
+                              {% set desired = state_attr(max_current_number, 'desired') %}
+                              {{ desired is none or not is_number(desired)
+                                 or (desired | float) != entity_min }}
                         then:
                           - action: number.set_value
                             target:
