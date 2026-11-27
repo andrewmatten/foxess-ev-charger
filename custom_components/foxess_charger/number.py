@@ -32,7 +32,7 @@ from . import (
     FoxESSServiceContextMixin,
     build_device_info,
 )
-from .adapter_api import CONFIRMED, ControlError
+from .adapter_api import ControlError
 from .const import (
     BLOCK_CONFIG,
     BLOCK_PHASE_BOX,
@@ -235,10 +235,10 @@ class FoxESSNumber(
             "desired": self._native_or_none(intended),
             "observed": self._native_or_none(reported),
             "last_outcome": self._last_outcome,
-            # The charger holds exactly what was asked, and the controller
-            # confirmed it rather than staging it.
+            # Charging is on and the charger holds exactly the saved value,
+            # whichever command (this entity, a turn-on, a restart) put it there.
             "confirmed": (
-                self._last_outcome == CONFIRMED
+                bool(getattr(self.coordinator.controller, "intent_enabled", False))
                 and intended is not None and intended == reported
             ),
         }
