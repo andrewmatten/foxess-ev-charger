@@ -20,43 +20,35 @@
 #     above or below the ceiling, so it doesn't hunt/oscillate on every
 #     small fluctuation around the ceiling itself.
 #   - Minimum dwell time between adjustments, measured from the selected
-#     Max Charging Current entity's `last_changed` timestamp rather than the
+#     Max Charging Current entity's `last_changed` timestamp (and, while
+#     charging is on, the Charging switch's `last_changed`) rather than the
 #     automation's `last_triggered`. The automation also runs once per minute
 #     as a safety net, so `last_triggered` would continually reset the dwell
-#     timer and eventually wedge all normal adjustments. The entity timestamp
-#     changes only when the setpoint actually changes, providing a plain,
-#     stateless throttle for the charger's embedded Modbus stack.
+#     timer and eventually wedge all normal adjustments.
 #   - Output is clamped to the Max Charging Current entity's own reported
 #     `min`/`max` attributes at runtime, not hardcoded 6/32 A - this keeps
 #     the blueprint correct on three-phase hardware (11kW/16A, 22kW/32A)
 #     where those bounds differ from the single-phase 6-32A default,
 #     falling back to 6/32 only if the entity doesn't report them.
-#   - Below the entity's own minimum, the session is stopped outright
-#     (Charging switch off) rather than writing an out-of-range value -
-#     the charger can't throttle any lower than that per the integration's
-#     own README.
+#   - When import exceeds the ceiling + hysteresis while charging above
+#     `min`, current is clamped down to `min` first; charging is stopped
+#     only once already at (or below) `min`, or immediately if the switch
+#     is already off with a staged `intent_enabled`.
 #   - Fail-safe: if the grid sensor has no numeric value or reports an
-#     unsupported unit, charging is stopped rather than left running at its
-#     last-known setpoint with no trustworthy grid reading. This bypasses
-#     the minimum-adjustment-delay dwell timer entirely.
-#   - When raising current from a stopped session, the automation calls
-#     number.set_value before switch.turn_on. This only guarantees Home
-#     Assistant service-call order: an integration may defer the physical
-#     write while stopped, so this blueprint cannot guarantee the hardware
-#     has accepted the new limit before charging starts.
-#   - switch.turn_on is only called when the switch is actually off - not
-#     unconditionally on every "raise" adjustment - so a normal setpoint
-#     tuning cycle while already charging doesn't re-issue a redundant start
-#     command every single time.
+#     unsupported unit, charging (and any staged `intent_enabled`) is
+#     stopped rather than left running or armed with no trustworthy grid
+#     reading. This bypasses the minimum-adjustment-delay dwell timer.
+#   - When starting from off, Max Charging Current is reset to `entity_min`
+#     before `switch.turn_on`, and `switch.turn_on` is only called when a
+#     car is connected (not idle/finished/faulted/locked), `intent_enabled`
+#     is not already true, and no latch or `needs_human` holds the charger.
 #
 # Known limitation, not solved here: this automation can only react to what
 # the grid power sensor *reports*. A sensor that goes truly unavailable is
 # caught by the fail-safe above, but a sensor that's merely stuck/frozen at
 # a stale numeric value - still technically "available", just not updating -
 # looks identical to a real, unchanging surplus and this blueprint has no
-# way to tell the difference without explicit freshness metadata (e.g. a
-# `last_changed`/`last_updated` staleness check), which is out of scope for
-# this pass.
+# way to tell the difference without explicit freshness metadata.
 #
 # Deliberately NOT included, on purpose: tariffs, time-of-use pricing, or
 # any cost logic whatsoever. This is a grid-limit/surplus controller only -
@@ -67,11 +59,12 @@ blueprint:
   description: >
     Keeps grid import near a target ceiling by raising/lowering the FoxESS
     EV Charger's Max Charging Current, with hysteresis and a minimum time
-    between actual current changes. Grid power sensors must report W or kW;
-    kW readings are converted to W. A once-per-minute safety check does not
-    reset that dwell timer. Charging stops if the grid sensor has no numeric
-    value or reports an unsupported unit. Grid-limit/surplus control only -
-    no tariff or cost logic.
+    between actual current changes. Starts from the charger's minimum
+    current when turning on from off, requires a connected vehicle, clamps
+    down to minimum current before stopping, and disarms any staged enable
+    when stopping or failing safe. Grid power sensors must report W or kW;
+    kW readings are converted to W. Grid-limit/surplus control only - no
+    tariff or cost logic.
   domain: automation
   source_url: https://github.com/andrewmatten/foxess-ev-charger/blob/main/blueprints/automation/foxess_charger/solar_surplus_charging.yaml
   homeassistant:
@@ -105,16 +98,35 @@ blueprint:
       description: The FoxESS EV Charger's Max Charging Current number entity.
       selector:
         entity:
+          integration: foxess_charger
           domain: number
     charging_switch:
       name: Charging switch
       description: >
-        The FoxESS EV Charger's Charging switch. Turned off when the
-        computed current would fall below the charger's own minimum, and
-        back on once surplus recovers.
+        The FoxESS EV Charger's Charging switch. Turned off when already at
+        minimum current and import stays above the ceiling, and back on
+        (from minimum current) once surplus recovers with a car connected.
       selector:
         entity:
+          integration: foxess_charger
           domain: switch
+    vehicle_connected:
+      name: Vehicle Connected / Status sensor
+      description: >
+        The FoxESS EV Charger's Vehicle Connected binary sensor (or Status
+        sensor) used to verify a car is plugged in and ready before turning
+        charging on. If omitted, the blueprint inspects the Charging
+        switch's device automatically.
+      default:
+      selector:
+        entity:
+          filter:
+            - integration: foxess_charger
+              domain: binary_sensor
+              device_class: plug
+            - integration: foxess_charger
+              domain: sensor
+              device_class: enum
     import_ceiling_watts:
       name: Grid import ceiling
       description: >
@@ -169,6 +181,7 @@ variables:
   invert_grid_power_sign: !input invert_grid_power_sign
   max_current_number: !input max_current_number
   charging_switch: !input charging_switch
+  vehicle_connected: !input vehicle_connected
   import_ceiling_watts: !input import_ceiling_watts
   hysteresis_watts: !input hysteresis_watts
   current_step_amps: !input current_step_amps
@@ -189,8 +202,9 @@ trigger:
 action:
   - choose:
       # Fail-safe: missing/nonnumeric value or unsupported unit - stop
-      # charging rather than interpret an unknown value as 0 W/export.
-      # Deliberately checked before the dwell gate.
+      # charging (and disarm any staged enable) rather than interpret an
+      # unknown value as 0 W/export. Deliberately checked before the dwell
+      # and number-availability gates.
       - conditions:
           - condition: template
             value_template: >
@@ -198,55 +212,81 @@ action:
                  grid_power_unit not in ['W', 'kW'] }}
         sequence:
           - if:
-              - condition: not
-                conditions:
-                  - condition: state
-                    entity_id: !input charging_switch
-                    state: "off"
+              - condition: template
+                value_template: >
+                  {{ not is_state(charging_switch, 'off') or
+                     state_attr(charging_switch, 'intent_enabled') == true }}
             then:
               - action: switch.turn_off
                 target:
                   entity_id: !input charging_switch
     default:
+      # Guard an unavailable/unknown/missing Max Charging Current entity so
+      # a missing state never raises on `.last_changed` or gets coerced to 6 A.
+      - condition: template
+        value_template: "{{ is_number(states(max_current_number)) }}"
       # Minimum dwell time between adjustments - only gates the normal
-      # raise/lower path below, never the fail-safe stop above. Use the
-      # selected number entity's last_changed timestamp: this automation's
-      # once-per-minute safety trigger updates last_triggered even on no-op
-      # runs, which would otherwise prevent a two-minute dwell from elapsing.
-      # A `condition:` step here (rather than the automation's top-level
-      # `condition:` key) stops just this sequence when false, without ever
-      # gating the fail-safe branch above.
+      # raise/lower path below, never the fail-safe stop above.
       - condition: template
         value_template: >
-          {{ states[max_current_number].last_changed is none or
-             (now() - states[max_current_number].last_changed).total_seconds() >= min_adjustment_seconds }}
+          {{ states[max_current_number] is not none and (
+               states[max_current_number].last_changed is none or
+               (now() - states[max_current_number].last_changed).total_seconds() >= min_adjustment_seconds
+             ) and (
+               is_state(charging_switch, 'off') or
+               states[charging_switch] is none or
+               states[charging_switch].last_changed is none or
+               (now() - states[charging_switch].last_changed).total_seconds() >= min_adjustment_seconds
+             ) }}
       - variables:
           raw_grid_power: >
             {{ (states(grid_power_sensor) | float(0)) *
                (1000 if grid_power_unit == 'kW' else 1) }}
           import_power: "{{ (raw_grid_power * -1) if invert_grid_power_sign else raw_grid_power }}"
-          current_amps: "{{ states(max_current_number) | float(6) }}"
+          current_amps: "{{ states(max_current_number) | float }}"
           entity_min: "{{ state_attr(max_current_number, 'min') | float(6) }}"
           entity_max: "{{ state_attr(max_current_number, 'max') | float(32) }}"
           switch_is_off: "{{ is_state(charging_switch, 'off') }}"
+          intent_enabled: "{{ state_attr(charging_switch, 'intent_enabled') == true }}"
+          car_connected: >
+            {% set dev = device_id(charging_switch) %}
+            {% set sibs = device_entities(dev) if dev else [] %}
+            {% set ns = namespace(plug=none, status=none) %}
+            {% for e in sibs %}
+              {% if e.startswith('binary_sensor.') and state_attr(e, 'device_class') == 'plug' %}
+                {% set ns.plug = e %}
+              {% elif e.startswith('sensor.') and 'finished' in (state_attr(e, 'options') or []) %}
+                {% set ns.status = e %}
+              {% endif %}
+            {% endfor %}
+            {% if vehicle_connected is string and vehicle_connected %}
+              {% if vehicle_connected.startswith('binary_sensor.') %}
+                {% set ok = is_state(vehicle_connected, 'on') %}
+              {% else %}
+                {% set ok = states(vehicle_connected) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+              {% endif %}
+            {% elif ns.plug is not none %}
+              {% set ok = is_state(ns.plug, 'on') %}
+            {% else %}
+              {% set ok = false %}
+            {% endif %}
+            {% if ok and ns.status is not none %}
+              {% set ok = states(ns.status) in ['connected', 'start', 'charging', 'paused', 'phase_switching'] %}
+            {% endif %}
+            {{ ok }}
       - choose:
-          # Import too high - lower current (or stop if that would go
-          # below the entity's own minimum).
+          # Import too high - clamp down to entity_min first while charging,
+          # and stop (or disarm a staged intent_enabled) once already at min
+          # or when the switch is already off.
           - conditions:
               - "{{ import_power > (import_ceiling_watts + hysteresis_watts) }}"
             sequence:
-              - variables:
-                  new_amps: "{{ current_amps - current_step_amps }}"
               - choose:
                   - conditions:
-                      - "{{ new_amps < entity_min }}"
+                      - "{{ current_amps <= entity_min or switch_is_off }}"
                     sequence:
                       - if:
-                          - condition: not
-                            conditions:
-                              - condition: state
-                                entity_id: !input charging_switch
-                                state: "off"
+                          - "{{ not switch_is_off or intent_enabled }}"
                         then:
                           - action: switch.turn_off
                             target:
@@ -256,32 +296,41 @@ action:
                     target:
                       entity_id: !input max_current_number
                     data:
-                      value: "{{ new_amps }}"
-          # Surplus available - raise current, clamped to the entity's own
-          # maximum. number.set_value is called before switch.turn_on when
-          # stopped, but an integration may defer the physical register
-          # write; this automation cannot guarantee the charger accepted
-          # the cap before starting. switch.turn_on is only issued when off,
-          # and never while the switch says a person must re-enable charging
-          # or a latch is held (its release backoff decides when it clears).
+                      value: "{{ [current_amps - current_step_amps, entity_min] | max }}"
+          # Surplus available - raise current if already charging, or start
+          # from entity_min if off and a connected car is ready to charge.
           - conditions:
               - "{{ import_power < (import_ceiling_watts - hysteresis_watts) }}"
             sequence:
-              - if:
-                  - "{{ current_amps < entity_max }}"
-                then:
-                  - action: number.set_value
-                    target:
-                      entity_id: !input max_current_number
-                    data:
-                      value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
-              - if:
-                  - "{{ switch_is_off }}"
-                  - "{{ not state_attr(charging_switch, 'needs_human') }}"
-                  - "{{ not state_attr(charging_switch, 'latch_cause') }}"
-                then:
-                  - action: switch.turn_on
-                    target:
-                      entity_id: !input charging_switch
+              - choose:
+                  - conditions:
+                      - "{{ not switch_is_off }}"
+                    sequence:
+                      - if:
+                          - "{{ current_amps < entity_max }}"
+                        then:
+                          - action: number.set_value
+                            target:
+                              entity_id: !input max_current_number
+                            data:
+                              value: "{{ [current_amps + current_step_amps, entity_max] | min }}"
+                  - conditions:
+                      - "{{ switch_is_off }}"
+                      - "{{ car_connected }}"
+                      - "{{ not intent_enabled }}"
+                      - "{{ not state_attr(charging_switch, 'needs_human') }}"
+                      - "{{ not state_attr(charging_switch, 'latch_cause') }}"
+                    sequence:
+                      - if:
+                          - "{{ current_amps != entity_min }}"
+                        then:
+                          - action: number.set_value
+                            target:
+                              entity_id: !input max_current_number
+                            data:
+                              value: "{{ entity_min }}"
+                      - action: switch.turn_on
+                        target:
+                          entity_id: !input charging_switch
         # Within the hysteresis band around the ceiling - no adjustment.
         default: []
