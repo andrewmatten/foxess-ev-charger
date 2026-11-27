@@ -1509,6 +1509,10 @@ class ChargingController:
                     self._hold_since is None
                     or self._clock() - self._hold_since < self._telemetry_grace()
                 )
+                and (
+                    self._cap_at is None
+                    or self._clock() - self._cap_at < self._cap_ack_limit()
+                )
             ):
                 # Link back: this fresh frame shows the session still running,
                 # but the telemetry protect lifts only on the next agreeing
@@ -1516,10 +1520,13 @@ class ChargingController:
                 # finish the session (status 5, firmware 1.8) and the finish
                 # would revoke a healthy enable. A bad or non-active frame
                 # still gets the zero. Bounded: once a hold has lasted the
-                # telemetry grace with no confirmed write, the zero goes out.
+                # telemetry grace or CAP_ACK_LIMIT_S passes since the last
+                # acknowledged positive cap, the zero goes out.
                 if self._hold_since is None:
                     self._hold_since = self._clock()
                 wire, power, current, held = None, None, None, True
+            if held and self._cap_at is not None:
+                capped = True
             if not (power or current):
                 self._authorized = None
             seen = mismatched = lost = False
