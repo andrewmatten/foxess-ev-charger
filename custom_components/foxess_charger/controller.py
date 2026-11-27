@@ -577,6 +577,9 @@ class ChargingController:
                 revision=max(self._intent.revision, candidate.revision) + 1,
             )
             self._persisted = await self._save_intent()
+            # A timed-out write may still land after this one: save once more
+            # from the refresh loop so the rolled-back intent is written last.
+            self._persist_pending = True
             raise ControlError(err)
         if self._intent != before:
             # Something newer (e.g. pause or fault latch) landed while the

@@ -142,3 +142,23 @@ async def test_timed_out_enable_save_landing_late_cannot_resurrect_enable(
     loaded = await ChargerStorage(hass, entry).async_load()
     assert loaded.controller["enabled"] is False
     assert loaded.controller["revision"] > late_rev[0]
+
+
+async def test_failed_positive_save_leaves_a_resave_pending():
+    """R1-H1 follow-up: a timed-out write may land after the rollback save, so
+    the rolled-back intent is saved once more from the refresh loop."""
+    calls = {"n": 0, "armed": False}
+
+    async def persist(_data):
+        if not calls["armed"]:
+            return
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk full")      # the enable's own save
+
+    c, _io = await make(saved(enabled=False, power=70), charging=False, persist=persist)
+    calls["armed"] = True
+    with pytest.raises(ControlError):
+        await c.async_enable()
+    assert not c.intent_enabled
+    assert c._persist_pending          # rollback is written again later
