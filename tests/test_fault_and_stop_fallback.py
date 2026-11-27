@@ -25,7 +25,10 @@ from custom_components.foxess_charger.const import DOMAIN
 from custom_components.foxess_charger.controller import ChargingController, ControlError
 from custom_components.foxess_charger.coordinator import FoxESSChargerCoordinator
 from custom_components.foxess_charger.energy import EnergyTracker
-from custom_components.foxess_charger.persistence import ChargerStorage
+from custom_components.foxess_charger.persistence import (
+    ATTEMPTED_REVISION_KEY,
+    ChargerStorage,
+)
 from custom_components.foxess_charger.transport import TransportError
 
 from ha_harness import make_entry
@@ -217,7 +220,7 @@ async def test_fault_latch_survives_failed_state_save_and_cold_restart(hass, has
     assert c.diagnostics["safety_latched"]
 
     # Cold restart: the in-memory attempted-revision guard is gone.
-    hass.data.pop(f"{DOMAIN}_attempted_revision", None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_REVISION_KEY, None)
     restored = (await ChargerStorage(hass, entry).async_load()).controller
     assert not restored["enabled"] or restored["safety_latched"]
 

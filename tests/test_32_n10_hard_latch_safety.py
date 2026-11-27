@@ -8,7 +8,12 @@ from homeassistant.helpers.storage import Store
 
 from custom_components.foxess_charger.const import DOMAIN
 from custom_components.foxess_charger.controller import ControlError
-from custom_components.foxess_charger.persistence import ChargerStorage, state_key
+from custom_components.foxess_charger.persistence import (
+    ATTEMPTED_HARD_KEY,
+    ATTEMPTED_REVISION_KEY,
+    ChargerStorage,
+    state_key,
+)
 
 from test_comms_latch_release import FAULT_LO, cause, healthy_for
 from test_controller import POW, FakeClock, FakeIO, make, saved
@@ -71,7 +76,8 @@ async def test_partial_save_failure_preserves_hard_latch_across_cold_restart(
     assert c.latch_cause == "hard" and c.needs_human
 
     # Cold restart: in-memory attempted tracking is gone.
-    hass.data.pop(f"{DOMAIN}_attempted_revision", None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_REVISION_KEY, None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_HARD_KEY, None)
     loaded = await ChargerStorage(hass, entry).async_load()
     assert loaded.controller["safety_latched"] is True
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 
 from custom_components.foxess_charger.const import DOMAIN
-from custom_components.foxess_charger.persistence import ChargerStorage
+from custom_components.foxess_charger.persistence import (
+    ATTEMPTED_REVISION_KEY,
+    ChargerStorage,
+)
 
 
 def _state(**overrides):
@@ -58,7 +61,7 @@ async def test_concurrent_session_and_controller_saves_preserve_hard_latch(hass,
     await asyncio.gather(t_sess, t_ctrl)
 
     # Cold restart: in-memory attempted revision is gone.
-    hass.data.pop(f"{DOMAIN}_attempted_revision", None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_REVISION_KEY, None)
     loaded = await ChargerStorage(hass, entry).async_load()
     assert loaded.source == "state"
     assert loaded.controller["enabled"] is False
@@ -100,7 +103,7 @@ async def test_concurrent_state_write_does_not_leave_mismatched_fingerprint(hass
     release.set()
     await asyncio.gather(t_sess, t_ctrl)
 
-    hass.data.pop(f"{DOMAIN}_attempted_revision", None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_REVISION_KEY, None)
     loaded = await ChargerStorage(hass, entry).async_load()
     assert loaded.source == "state"
     assert loaded.controller["enabled"] is False

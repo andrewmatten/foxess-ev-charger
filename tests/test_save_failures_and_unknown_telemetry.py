@@ -14,7 +14,10 @@ import pytest
 from custom_components.foxess_charger import switch as SW
 from custom_components.foxess_charger.const import DOMAIN
 from custom_components.foxess_charger.controller import ControlError
-from custom_components.foxess_charger.persistence import ChargerStorage
+from custom_components.foxess_charger.persistence import (
+    ATTEMPTED_REVISION_KEY,
+    ChargerStorage,
+)
 from custom_components.foxess_charger.session import SessionTracker
 
 from test_controller import POW, POWER, STATUS, FakeClock, FakeIO, make, saved
@@ -42,7 +45,7 @@ async def test_fault_stop_survives_first_projection_failure_and_cold_restart(
 
     # Cold restart: the in-memory attempted-revision guard is gone and every
     # file still holds the older enabled record.
-    hass.data.pop(f"{DOMAIN}_attempted_revision", None)
+    hass.data.get(DOMAIN, {}).pop(ATTEMPTED_REVISION_KEY, None)
     restored = (await ChargerStorage(hass, entry).async_load()).controller
     assert restored["enabled"] and not restored["safety_latched"]   # the cut point
 

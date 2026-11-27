@@ -52,6 +52,10 @@ POWER_RAW_MAX = MAX_POWER_RAW
 LEGACY_ACTIVE_STATUS = (2, 3, 4)
 CURRENT_RAW_RANGE = (60, 320)
 TIME_VALIDITY_RANGE = USER_TIME_VALIDITY_RANGE
+# Internal keys kept under hass.data[DOMAIN] (outliving entry reloads so a
+# stale on-disk record cannot undo a failed save; cleared by async_remove_all).
+ATTEMPTED_REVISION_KEY = "_attempted_revision"
+ATTEMPTED_HARD_KEY = "_attempted_hard"
 
 
 def state_key(entry_id: str) -> str:
@@ -160,11 +164,12 @@ class ChargerStorage:
         # entry. It outlives the entry (reloads), so a reload can tell that
         # the record on disk is older than intent the controller already
         # acted on (e.g. a pause whose save failed).
-        self._attempted: dict[str, int] = hass.data.setdefault(
-            f"{DOMAIN}_attempted_revision", {}
+        domain_data = hass.data.setdefault(DOMAIN, {})
+        self._attempted: dict[str, int] = domain_data.setdefault(
+            ATTEMPTED_REVISION_KEY, {}
         )
-        self._attempted_hard: dict[str, bool] = hass.data.setdefault(
-            f"{DOMAIN}_attempted_hard", {}
+        self._attempted_hard: dict[str, bool] = domain_data.setdefault(
+            ATTEMPTED_HARD_KEY, {}
         )
         self._entry_id = entry_id
 
@@ -504,4 +509,36 @@ class ChargerStorage:
         await self._async_write_all()
 
     async def async_save_energy(self, baselines: dict[str, dict]) -> None:
-        await self._save("energy", self._energy_store, baselines)
+        async with self._write_lock:
+            await self._save("energy", self._energy_store, baselines)
+
+    async def async_remove_all(self) -> None:
+        """Remove all four stores and per-entry revision tracking.
+
+        Called when the config entry is deleted so no orphaned storage files
+        or in-memory revision guards remain. Tries every store even if one
+        removal fails, then re-raises the first error.
+        """
+        stores = (
+            ("state", self._state_store),
+            ("session", self._session_store),
+            ("setpoints", self._setpoints_store),
+            ("energy", self._energy_store),
+        )
+        first_err: Exception | None = None
+        async with self._write_lock:
+            for name, store in stores:
+                try:
+                    await store.async_remove()
+                except Exception as err:  # noqa: BLE001 - clean up remaining stores
+                    _LOGGER.warning("Could not remove FoxESS %s storage: %s", name, err)
+                    if first_err is None:
+                        first_err = err
+            self._written.clear()
+            self._controller = None
+            self._session_fields = {f: None for f in SESSION_FIELDS[:4]}
+            self._session_extra = {"rearm_required": False}
+            self._attempted.pop(self._entry_id, None)
+            self._attempted_hard.pop(self._entry_id, None)
+        if first_err is not None:
+            raise first_err
