@@ -132,10 +132,14 @@ class FakeController:
             self.fail_poll -= 1
             raise ControlError("status block unreadable (fake)")
         snap = dict(self.hw)
+        snap["status_raw"] = snap["status"]
+        snap["cc_status_raw"] = snap["cc_status"]
         snap["status_valid"] = snap["status"] in {0, 1, 2, 3, 4, 5, 6, 8, 9}
         snap["cc_status_valid"] = snap["cc_status"] in {0, 1}
         if not snap["status_valid"]:
             snap["status"] = None
+        if not snap["cc_status_valid"]:
+            snap["cc_status"] = None
         snap["status_block_ok"] = True
         snap["config_block_ok"] = self.config_ok
         if not self.config_ok:

@@ -285,6 +285,15 @@ def _import_release_243(tmp_path):
     """Materialise the 2.4.3 integration from git as package `foxess_243`
     (under a custom_components/ directory, as HA's frame helper expects of
     integration code)."""
+    try:
+        check = subprocess.run(
+            ["git", "-C", REPO, "cat-file", "-e", f"{RELEASE_243}^{{commit}}"],
+            capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        pytest.skip("git executable is not available")
+    if check.returncode != 0:
+        pytest.skip(f"commit {RELEASE_243} is not available in git history")
     root = tmp_path / "custom_components"
     pkg = root / "foxess_243"
     pkg.mkdir(parents=True)

@@ -79,6 +79,9 @@ def fc03_response_pdu(registers: list[int]) -> bytes:
     return FC_READ_HOLDING.to_bytes(1, "big") + len(data).to_bytes(1, "big") + data
 
 
+_ACTIVE_PATCHERS: list = []
+
+
 def make_client(
     chunks: list[bytes], extra_socket_chunks: list[list[bytes]] | None = None,
 ) -> tuple[FoxESSModbusClient, list[FakeSocket]]:
@@ -89,12 +92,14 @@ def make_client(
     Returns the client plus the list of FakeSockets created, in order, so a
     test can assert whether/when a reconnect happened.
 
-    The patcher is intentionally never stopped - it's scoped to the test via
-    pytest's per-test import/patch lifecycle (each test gets a fresh
-    unittest.mock.patch call), and stopping it would only matter if
-    something else in the same process needed the real
-    socket.create_connection afterwards, which nothing here does.
+    Stopped automatically at test teardown (conftest `_stop_unstopped_patches`)
+    and before starting a replacement patch in the same test.
     """
+    while _ACTIVE_PATCHERS:
+        try:
+            _ACTIVE_PATCHERS.pop().stop()
+        except RuntimeError:
+            pass
     client = FoxESSModbusClient(HOST, PORT, SLAVE_ID)
     created: list[FakeSocket] = []
     remaining_chunks = [chunks] + list(extra_socket_chunks or [])
@@ -105,10 +110,12 @@ def make_client(
         created.append(sock)
         return sock
 
-    patch(
+    patcher = patch(
         "custom_components.foxess_charger.modbus_client.socket.create_connection",
         side_effect=_fake_create_connection,
-    ).start()
+    )
+    patcher.start()
+    _ACTIVE_PATCHERS.append(patcher)
     return client, created
 
 

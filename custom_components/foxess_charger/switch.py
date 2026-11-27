@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -20,7 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import (
     FoxESSBlockAvailabilityMixin,
     FoxESSChargerCoordinator,
-    FoxESSLongContextMixin,
+    FoxESSServiceContextMixin,
     build_device_info,
 )
 from .adapter_api import CONFIRMED, ControlError
@@ -52,30 +52,40 @@ async def async_setup_entry(
     )
 
 
+_UNSET = object()
+
+
 class _ControllerSwitch(
-    FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity,
+    FoxESSServiceContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, SwitchEntity,
 ):
     """Shared plumbing: identity, and running a controller command."""
 
     _attr_has_entity_name = True
+    entity_description: SwitchEntityDescription
 
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry,
-                 unique_suffix: str, name: str) -> None:
+    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{unique_suffix}"
-        # Set explicitly, so it is used instead of the translated name.
-        self._attr_name = name
+        self._attr_unique_id = f"{entry.entry_id}_{self.entity_description.key}"
         self._attr_device_info = build_device_info(entry, coordinator)
 
-    async def _async_command(self, command: Awaitable[Any], action: str) -> Any:
+    async def _async_command(
+        self, command: Awaitable[Any], action: str, *, context: Any = _UNSET,
+    ) -> Any:
         """Await a controller command, then refresh and publish the state.
         ``action`` completes the error message ("failed to <action>")."""
+        ctx = self._take_service_context() if context is _UNSET else context
         try:
             result = await command
         except ControlError as err:
             raise HomeAssistantError(f"FoxESS: failed to {action}: {err}") from err
-        await self.coordinator.async_refresh()
-        self.async_write_ha_state()
+        self._applying_service_context = ctx
+        try:
+            self._restore_service_context(ctx)
+            await self.coordinator.async_refresh()
+            self._restore_service_context(ctx)
+            self.async_write_ha_state()
+        finally:
+            self._applying_service_context = None
         return result
 
 
@@ -85,12 +95,12 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     fault latch or Stop holds output at zero, or no session is running;
     unknown while the status cannot be read."""
 
-    _attr_icon = "mdi:ev-plug-type2"
-    _attr_translation_key = "charging"
+    entity_description = SwitchEntityDescription(
+        key="charging",
+        translation_key="charging",
+        icon="mdi:ev-plug-type2",
+    )
     _block = BLOCK_STATUS
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "charging", "Charging")
 
     @property
     def is_on(self) -> bool | None:
@@ -113,11 +123,13 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     async def async_turn_on(self, **kwargs: Any) -> None:
         # A hard latch needs a person (a call with a user, not an automation)
         # who could already see it in Home Assistant.
-        person = self._context is not None and self._context.user_id is not None
+        context = self._take_service_context()
+        person = context is not None and context.user_id is not None
         shown = (self.coordinator.data or {}).get("needs_human") is True
         await self._async_command(
             self.coordinator.controller.async_enable(clear_hard=person and shown),
             "start charging",
+            context=context,
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -132,12 +144,12 @@ class FoxESSChargingSwitch(_ControllerSwitch):
 class FoxESSLockSwitch(_ControllerSwitch):
     """Connector lock: on = locked (register 0x100F reads 1)."""
 
-    _attr_icon = "mdi:lock"
-    _attr_translation_key = "lock"
+    entity_description = SwitchEntityDescription(
+        key="lock",
+        translation_key="lock",
+        icon="mdi:lock",
+    )
     _block = BLOCK_STATUS
-
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "lock", "Lock")
 
     @property
     def is_on(self) -> bool | None:
@@ -163,17 +175,20 @@ class FoxESSAutoPhaseSwitchSwitch(_ControllerSwitch):
     """Automatic phase switching (0x300A): the charger's own function on
     three-phase models. The manual phase command (0x4002) is what needs the box."""
 
-    _attr_icon = "mdi:auto-fix"
-    _attr_translation_key = "auto_phase_switch"
-    _attr_entity_registry_enabled_default = False
+    entity_description = SwitchEntityDescription(
+        key="auto_phase_switch",
+        translation_key="auto_phase_switch",
+        icon="mdi:auto-fix",
+        entity_registry_enabled_default=False,
+    )
     _block = BLOCK_PHASE_BOX
 
-    def __init__(self, coordinator: FoxESSChargerCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "auto_phase_switch", "Auto Phase Switch")
-
     @property
-    def is_on(self) -> bool:
-        return (self.coordinator.data or {}).get("auto_phase_switch") == 1
+    def is_on(self) -> bool | None:
+        val = (self.coordinator.data or {}).get("auto_phase_switch")
+        if val not in (0, 1) or isinstance(val, bool):
+            return None
+        return val == 1
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._async_command(

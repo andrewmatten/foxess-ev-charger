@@ -22,6 +22,7 @@ from .const import (
     WORK_MODE_MAP, decode_bitmask,
 )
 from .energy import EnergyTracker
+from .protocol import UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
 from .session import SessionTracker
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ BLOCK_KEYS: dict[str, tuple[str, ...]] = {
         "lock_status", "phase_sequence", "max_power_raw", "min_power_raw",
         "max_current_raw", "min_current_raw", "alarm_code",
         "total_energy_raw", "current_energy_raw", "fault_code", "rfid_card",
-        "status_valid", "cc_status_valid",
+        "status_raw", "cc_status_raw", "status_valid", "cc_status_valid",
     ),
     BLOCK_CONFIG: (
         "work_mode", "max_charging_current_raw", "max_charging_power_raw",
@@ -171,8 +172,14 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
                     time.monotonic() - self._offline_since,
                 )
                 self._offline_since = None
-            self.energy.apply(data, session_boundary=self.sessions.is_boundary(data))
-            self.sessions.update(data, intent_enabled=self._intent_enabled())
+            intent_enabled = self._intent_enabled()
+            self.energy.apply(
+                data,
+                session_boundary=self.sessions.is_boundary(
+                    data, intent_enabled=intent_enabled,
+                ),
+            )
+            self.sessions.update(data, intent_enabled=intent_enabled)
         else:
             self._status_failures += 1
             if self._offline_since is None:
@@ -195,9 +202,13 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         if self.sessions.last_session is not None:
             data["last_session"] = self.sessions.last_session
 
-        if "active_faults" not in observation:
+        if data.get("fault_code") == UNKNOWN_FAULT_CODE:
+            data["fault_code"] = None
+        if data.get("alarm_code") == UNKNOWN_ALARM_CODE:
+            data["alarm_code"] = None
+        if "active_faults" not in observation or observation.get("fault_code") == UNKNOWN_FAULT_CODE:
             data["active_faults"] = decode_bitmask(data.get("fault_code"), FAULT_BITS, "fault_code")
-        if "active_alarms" not in observation:
+        if "active_alarms" not in observation or observation.get("alarm_code") == UNKNOWN_ALARM_CODE:
             data["active_alarms"] = decode_bitmask(data.get("alarm_code"), ALARM_BITS, "alarm_code")
         self._add_controller_view(data)
         self._sync_needs_human_issue(data["needs_human"])

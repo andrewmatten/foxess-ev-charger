@@ -90,13 +90,16 @@ class SessionTracker:
             "prev_status": self.prev_status,
         }
 
-    def is_boundary(self, data: dict) -> bool:
+    def is_boundary(self, data: dict, *, intent_enabled: bool | None = None) -> bool:
         """Whether this observation starts a new logical session."""
         status = valid_status(data)
+        rearm_required = False if intent_enabled else self.rearm_required
         return (
             status in SESSION_ACTIVE_STATUSES
             and not self.active
-            and not self.rearm_required
+            and not rearm_required
+            # Already paused by the user and not drawing: nothing to record.
+            and not (intent_enabled is False and self._pause_observed(data, status))
         )
 
     def update(self, data: dict, *, intent_enabled: bool | None) -> None:
@@ -114,12 +117,7 @@ class SessionTracker:
                 self.dirty = True
             if self.active:
                 self._complete(data)
-        elif (
-            status in SESSION_ACTIVE_STATUSES and not self.active
-            and not self.rearm_required
-            # Already paused by the user and not drawing: nothing to record.
-            and not (intent_enabled is False and self._pause_observed(data, status))
-        ):
+        elif self.is_boundary(data, intent_enabled=intent_enabled):
             self._start(data)
 
         if self.active:

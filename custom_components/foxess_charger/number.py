@@ -23,7 +23,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import (
     FoxESSBlockAvailabilityMixin,
     FoxESSChargerCoordinator,
-    FoxESSLongContextMixin,
+    FoxESSServiceContextMixin,
     build_device_info,
 )
 from .adapter_api import CONFIRMED, ControlError
@@ -77,7 +77,7 @@ class FoxESSNumberEntityDescription(NumberEntityDescription):
 NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     # The two charging limits (controller intent).
     FoxESSNumberEntityDescription(
-        key="max_charging_current", name="Max Charging Current",
+        key="max_charging_current",
         translation_key="max_charging_current", icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         native_min_value=6.0, native_max_value=32.0, native_step=0.1,
@@ -85,7 +85,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         tenths=True, intent=INTENT_CURRENT, rated_key="max_current_a",
     ),
     FoxESSNumberEntityDescription(
-        key="max_charging_power", name="Max Charging Power",
+        key="max_charging_power",
         translation_key="max_charging_power", icon="mdi:lightning-bolt",
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
         native_min_value=0.0, native_max_value=7.3, native_step=0.1,
@@ -95,7 +95,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
     # Per-session limits; the charger reports 65535 while none is set, which
     # is shown as no value rather than as a number.
     FoxESSNumberEntityDescription(
-        key="allowed_charge_time", name="Allowed Charge Time",
+        key="allowed_charge_time",
         translation_key="allowed_charge_time", icon="mdi:timer",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=0, native_max_value=1440, native_step=1,
@@ -103,7 +103,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         no_value_raw=NO_LIMIT,
     ),
     FoxESSNumberEntityDescription(
-        key="allowed_charge_energy", name="Allowed Charge Energy",
+        key="allowed_charge_energy",
         translation_key="allowed_charge_energy", icon="mdi:battery-charging",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         native_min_value=0, native_max_value=999, native_step=1,
@@ -111,7 +111,7 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         no_value_raw=NO_LIMIT,
     ),
     FoxESSNumberEntityDescription(
-        key="time_validity", name="Command Time Validity",
+        key="time_validity",
         translation_key="time_validity", icon="mdi:clock-outline",
         native_unit_of_measurement=UnitOfTime.SECONDS,
         # The protocol documents 10-60 s, but the charger reports and accepts
@@ -122,14 +122,15 @@ NUMBERS: tuple[FoxESSNumberEntityDescription, ...] = (
         register=REG_TIME_VALIDITY, reading_key="time_validity",
     ),
     FoxESSNumberEntityDescription(
-        key="default_current", name="Default Current (Fallback)",
+        key="default_current",
         translation_key="default_current", icon="mdi:current-ac",
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         native_min_value=6.0, native_max_value=32.0, native_step=0.1,
-        register=REG_DEFAULT_CURRENT, reading_key="default_current_raw", tenths=True,
+        register=REG_DEFAULT_CURRENT, reading_key="default_current_raw",
+        tenths=True, rated_key="max_current_a",
     ),
     FoxESSNumberEntityDescription(
-        key="min_switch_interval", name="Min Phase Switch Interval",
+        key="min_switch_interval",
         translation_key="min_switch_interval", icon="mdi:timer-sand",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         native_min_value=5, native_max_value=30, native_step=1,
@@ -153,7 +154,7 @@ async def async_setup_entry(
 
 
 class FoxESSNumber(
-    FoxESSLongContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity,
+    FoxESSServiceContextMixin, FoxESSBlockAvailabilityMixin, CoordinatorEntity, NumberEntity,
 ):
     """A charger setting, changed only through the controller."""
 
@@ -175,7 +176,7 @@ class FoxESSNumber(
 
     @property
     def native_max_value(self) -> float:
-        """The detected model's rating for the two charging limits; the
+        """The detected model's rating for capability-bound numbers; the
         description's static maximum for everything else."""
         description = self.entity_description
         if description.rated_key is None:
@@ -232,6 +233,7 @@ class FoxESSNumber(
         }
 
     async def async_set_native_value(self, value: float) -> None:
+        context = self._take_service_context()
         description = self.entity_description
         raw = description.to_raw(value)
         controller = self.coordinator.controller
@@ -251,5 +253,11 @@ class FoxESSNumber(
             "%s set to %s (register value %d): %s",
             description.key, value, raw, self._last_outcome,
         )
-        await self.coordinator.async_refresh()
-        self.async_write_ha_state()
+        self._applying_service_context = context
+        try:
+            self._restore_service_context(context)
+            await self.coordinator.async_refresh()
+            self._restore_service_context(context)
+            self.async_write_ha_state()
+        finally:
+            self._applying_service_context = None

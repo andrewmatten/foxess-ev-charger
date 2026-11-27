@@ -8,12 +8,12 @@ transport; every hardware change goes through the controller's API.
 from __future__ import annotations
 
 import logging
-import time
+import time  # noqa: F401 - kept on module for test_service_context clock patch
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_SCAN_INTERVAL
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -63,22 +63,35 @@ def build_device_info(entry: ConfigEntry, coordinator: FoxESSChargerCoordinator)
     )
 
 
-class FoxESSLongContextMixin:
-    """Keep the service-call context for 60 s instead of HA's 5 s.
-
-    These entities change state only after the charger confirms (~10-20 s),
-    so with the default window HA drops the context first and the logbook
-    cannot say which automation or user made the request. (This HA version
-    has no per-entity setting, so the window is widened via the timestamp
-    that HA compares against.)
+class FoxESSServiceContextMixin:
+    """Preserve the service-call context across slow charger confirmation
+    using public Entity.async_set_context() rather than mutating private
+    Entity context attributes.
     """
 
-    _CONTEXT_RECENT_SECONDS = 60
+    _pending_service_context: Context | None = None
+    _applying_service_context: Context | None = None
 
     @callback
-    def async_set_context(self, context) -> None:
+    def async_set_context(self, context: Context) -> None:
         super().async_set_context(context)
-        self._context_set = time.time() + (self._CONTEXT_RECENT_SECONDS - 5)
+        self._pending_service_context = context
+
+    def _take_service_context(self) -> Context | None:
+        context = self._pending_service_context
+        self._pending_service_context = None
+        return context
+
+    @callback
+    def _restore_service_context(self, context: Context | None) -> None:
+        if context is not None:
+            super().async_set_context(context)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if self._applying_service_context is not None:
+            super().async_set_context(self._applying_service_context)
+        super()._handle_coordinator_update()
 
 
 class FoxESSBlockAvailabilityMixin:

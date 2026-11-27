@@ -144,9 +144,9 @@ class TestSustainedWindowCorruption:
             clock.t += 13.0
         assert None in results
 
-    def test_window_resets_after_a_rejection_so_it_can_recover(self):
-        # The window's contents have no public view; asserting them directly
-        # is the only way to pin "restarts empty after a rejection".
+    def test_window_drops_only_rejected_sample_and_still_recovers(self):
+        # Only the rejected sample is popped; accepted history stays in the
+        # rolling window so subsequent corrupt ticks cannot slip through.
         tracker, clock = make_tracker()
         raw = 1000
         for _ in range(200):
@@ -156,7 +156,9 @@ class TestSustainedWindowCorruption:
             clock.t += 13.0
         else:
             pytest.fail("window never tripped")
-        assert tracker._window["total_energy_raw"] == []
+        window = tracker._window["total_energy_raw"]
+        assert len(window) == 4
+        assert (clock.t, raw) not in window
 
 
 class TestWindowStoresRawObservationsNotDeltas:

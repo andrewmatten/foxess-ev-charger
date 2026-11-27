@@ -35,11 +35,11 @@
         'fault': False,
         'fault_status_only': False,
         'idle': False,
-        'missing_keys': False,
-        'none_values': False,
+        'missing_keys': None,
+        'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': False,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -84,7 +84,7 @@
         'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': True,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -129,7 +129,7 @@
         'none_values': None,
         'paused_by_vehicle': False,
         'phase_switching': False,
-        'sentinels': True,
+        'sentinels': None,
         'three_phase_a011': False,
         'three_phase_a022': False,
         'unknown_enums': False,
@@ -1175,7 +1175,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:battery-charging',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 0,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -1553,7 +1553,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:timer',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 0,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -1979,7 +1979,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:current-ac',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 6.0,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -2096,12 +2096,12 @@
         }),
         'three_phase_a011/desired=(22, 100)': dict({
           'attributes': None,
-          'max': 32.0,
+          'max': 16.0,
           'value': 6.0,
         }),
         'three_phase_a011/desired=(None, None)': dict({
           'attributes': None,
-          'max': 32.0,
+          'max': 16.0,
           'value': 6.0,
         }),
         'three_phase_a022/desired=(22, 100)': dict({
@@ -2357,7 +2357,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:current-ac',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 6.0,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -3141,7 +3141,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:lightning-bolt',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 0.0,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -3861,7 +3861,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:timer-sand',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 5,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -4191,7 +4191,7 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:clock-outline',
-      'long_service_context': True,
+      'long_service_context': False,
       'min': 10,
       'mode': <NumberMode.AUTO: 'auto'>,
       'name': 'raises AttributeError',
@@ -5331,7 +5331,7 @@
     'disabled_by': <RegistryEntryDisabler.INTEGRATION: 'integration'>,
     'domain': 'select',
     'entity_category': None,
-    'entity_id': 'select.foxess_charger_phase_sequence',
+    'entity_id': 'select.foxess_charger_phasenumschaltung',
     'has_entity_name': True,
     'hidden_by': None,
     'icon': None,
@@ -5339,12 +5339,12 @@
     'labels': set({
     }),
     'name': None,
-    'object_id_base': 'Phase Sequence',
+    'object_id_base': 'Phasenumschaltung',
     'options': dict({
     }),
     'original_device_class': None,
     'original_icon': 'mdi:electric-switch',
-    'original_name': 'Phase Sequence',
+    'original_name': 'Phasenumschaltung',
     'platform': 'foxess_charger',
     'previous_unique_id': None,
     'suggested_object_id': None,
@@ -5357,7 +5357,7 @@
 # name: test_registry_and_state_contract[de][select.contractentry01_phase_sequence-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
-      'friendly_name': 'FoxESS Charger Phase Sequence',
+      'friendly_name': 'FoxESS Charger Phasenumschaltung',
       'icon': 'mdi:electric-switch',
       'options': list([
         'three_phase',
@@ -5366,7 +5366,7 @@
       ]),
     }),
     'context': <ANY>,
-    'entity_id': 'select.foxess_charger_phase_sequence',
+    'entity_id': 'select.foxess_charger_phasenumschaltung',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
@@ -5392,7 +5392,7 @@
     'disabled_by': None,
     'domain': 'select',
     'entity_category': None,
-    'entity_id': 'select.foxess_charger_work_mode',
+    'entity_id': 'select.foxess_charger_arbeitsmodus',
     'has_entity_name': True,
     'hidden_by': None,
     'icon': None,
@@ -5400,12 +5400,12 @@
     'labels': set({
     }),
     'name': None,
-    'object_id_base': 'Work Mode',
+    'object_id_base': 'Arbeitsmodus',
     'options': dict({
     }),
     'original_device_class': None,
     'original_icon': 'mdi:ev-station',
-    'original_name': 'Work Mode',
+    'original_name': 'Arbeitsmodus',
     'platform': 'foxess_charger',
     'previous_unique_id': None,
     'suggested_object_id': None,
@@ -5418,7 +5418,7 @@
 # name: test_registry_and_state_contract[de][select.contractentry01_work_mode-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
-      'friendly_name': 'FoxESS Charger Work Mode',
+      'friendly_name': 'FoxESS Charger Arbeitsmodus',
       'icon': 'mdi:ev-station',
       'options': list([
         'Controlled',
@@ -5427,7 +5427,7 @@
       ]),
     }),
     'context': <ANY>,
-    'entity_id': 'select.foxess_charger_work_mode',
+    'entity_id': 'select.foxess_charger_arbeitsmodus',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
@@ -7307,7 +7307,7 @@
     'disabled_by': <RegistryEntryDisabler.INTEGRATION: 'integration'>,
     'domain': 'switch',
     'entity_category': None,
-    'entity_id': 'switch.foxess_charger_auto_phase_switch',
+    'entity_id': 'switch.foxess_charger_automatische_phasenumschaltung',
     'has_entity_name': True,
     'hidden_by': None,
     'icon': None,
@@ -7315,12 +7315,12 @@
     'labels': set({
     }),
     'name': None,
-    'object_id_base': 'Auto Phase Switch',
+    'object_id_base': 'Automatische Phasenumschaltung',
     'options': dict({
     }),
     'original_device_class': None,
     'original_icon': 'mdi:auto-fix',
-    'original_name': 'Auto Phase Switch',
+    'original_name': 'Automatische Phasenumschaltung',
     'platform': 'foxess_charger',
     'previous_unique_id': None,
     'suggested_object_id': None,
@@ -7333,11 +7333,11 @@
 # name: test_registry_and_state_contract[de][switch.contractentry01_auto_phase_switch-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
-      'friendly_name': 'FoxESS Charger Auto Phase Switch',
+      'friendly_name': 'FoxESS Charger Automatische Phasenumschaltung',
       'icon': 'mdi:auto-fix',
     }),
     'context': <ANY>,
-    'entity_id': 'switch.foxess_charger_auto_phase_switch',
+    'entity_id': 'switch.foxess_charger_automatische_phasenumschaltung',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
@@ -7357,7 +7357,7 @@
     'disabled_by': None,
     'domain': 'switch',
     'entity_category': None,
-    'entity_id': 'switch.foxess_charger_charging',
+    'entity_id': 'switch.foxess_charger_laden',
     'has_entity_name': True,
     'hidden_by': None,
     'icon': None,
@@ -7365,12 +7365,12 @@
     'labels': set({
     }),
     'name': None,
-    'object_id_base': 'Charging',
+    'object_id_base': 'Laden',
     'options': dict({
     }),
     'original_device_class': None,
     'original_icon': 'mdi:ev-plug-type2',
-    'original_name': 'Charging',
+    'original_name': 'Laden',
     'platform': 'foxess_charger',
     'previous_unique_id': None,
     'suggested_object_id': None,
@@ -7384,14 +7384,14 @@
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'control_phase': 'idle',
-      'friendly_name': 'FoxESS Charger Charging',
+      'friendly_name': 'FoxESS Charger Laden',
       'icon': 'mdi:ev-plug-type2',
       'intent_enabled': True,
       'latch_cause': None,
       'needs_human': False,
     }),
     'context': <ANY>,
-    'entity_id': 'switch.foxess_charger_charging',
+    'entity_id': 'switch.foxess_charger_laden',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
@@ -7411,7 +7411,7 @@
     'disabled_by': None,
     'domain': 'switch',
     'entity_category': None,
-    'entity_id': 'switch.foxess_charger_lock',
+    'entity_id': 'switch.foxess_charger_sperre',
     'has_entity_name': True,
     'hidden_by': None,
     'icon': None,
@@ -7419,12 +7419,12 @@
     'labels': set({
     }),
     'name': None,
-    'object_id_base': 'Lock',
+    'object_id_base': 'Sperre',
     'options': dict({
     }),
     'original_device_class': None,
     'original_icon': 'mdi:lock',
-    'original_name': 'Lock',
+    'original_name': 'Sperre',
     'platform': 'foxess_charger',
     'previous_unique_id': None,
     'suggested_object_id': None,
@@ -7437,11 +7437,11 @@
 # name: test_registry_and_state_contract[de][switch.contractentry01_lock-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
-      'friendly_name': 'FoxESS Charger Lock',
+      'friendly_name': 'FoxESS Charger Sperre',
       'icon': 'mdi:lock',
     }),
     'context': <ANY>,
-    'entity_id': 'switch.foxess_charger_lock',
+    'entity_id': 'switch.foxess_charger_sperre',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
@@ -10374,7 +10374,7 @@
       'has_entity_name': True,
       'icon': 'mdi:electric-switch',
       'long_service_context': False,
-      'name': 'Phase Sequence',
+      'name': 'raises AttributeError',
       'options': list([
         'three_phase',
         'l2_single_phase',
@@ -10492,7 +10492,7 @@
       'has_entity_name': True,
       'icon': 'mdi:ev-station',
       'long_service_context': False,
-      'name': 'Work Mode',
+      'name': 'raises AttributeError',
       'options': list([
         'Controlled',
         'Plug&Charge',
@@ -10695,7 +10695,7 @@
             'active_alarms': list([
             ]),
           }),
-          'value': 65535,
+          'value': None,
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -10923,7 +10923,7 @@
         'sentinels': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -10938,7 +10938,7 @@
         'unknown_enums': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'zeros': dict({
           'attributes': dict({
@@ -11639,7 +11639,7 @@
             'active_faults': list([
             ]),
           }),
-          'value': 4294967295,
+          'value': None,
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -13726,7 +13726,7 @@
         'sentinels': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -13741,7 +13741,7 @@
         'unknown_enums': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'zeros': dict({
           'attributes': dict({
@@ -14498,8 +14498,8 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:auto-fix',
-      'long_service_context': True,
-      'name': 'Auto Phase Switch',
+      'long_service_context': False,
+      'name': 'raises AttributeError',
       'translation_key': 'auto_phase_switch',
       'unique_id': 'valuesentry_auto_phase_switch',
       'values': dict({
@@ -14521,11 +14521,11 @@
         }),
         'empty/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'empty/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'fault/intent_enabled=False': dict({
           'attributes': None,
@@ -14553,19 +14553,19 @@
         }),
         'missing_keys/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'missing_keys/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'none_values/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'none_values/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'paused_by_vehicle/intent_enabled=False': dict({
           'attributes': None,
@@ -14585,11 +14585,11 @@
         }),
         'sentinels/intent_enabled=False': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'sentinels/intent_enabled=True': dict({
           'attributes': None,
-          'is_on': False,
+          'is_on': None,
         }),
         'three_phase_a011/intent_enabled=False': dict({
           'attributes': None,
@@ -14746,8 +14746,8 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:ev-plug-type2',
-      'long_service_context': True,
-      'name': 'Charging',
+      'long_service_context': False,
+      'name': 'raises AttributeError',
       'translation_key': 'charging',
       'unique_id': 'valuesentry_charging',
       'values': dict({
@@ -15128,8 +15128,8 @@
       'entity_category': None,
       'has_entity_name': True,
       'icon': 'mdi:lock',
-      'long_service_context': True,
-      'name': 'Lock',
+      'long_service_context': False,
+      'name': 'raises AttributeError',
       'translation_key': 'lock',
       'unique_id': 'valuesentry_lock',
       'values': dict({
@@ -15377,9 +15377,9 @@
         'entity.select.phase_switching_control.state.l3_single_phase': 'L3 (Einphasig)',
         'entity.select.phase_switching_control.state.three_phase': 'Dreiphasig',
         'entity.select.work_mode_control.name': 'Arbeitsmodus',
-        'entity.select.work_mode_control.state.controlled': 'Gesteuert',
-        'entity.select.work_mode_control.state.locked': 'Gesperrt',
-        'entity.select.work_mode_control.state.plug_and_charge': 'Plug & Charge',
+        'entity.select.work_mode_control.state.Controlled': 'Gesteuert',
+        'entity.select.work_mode_control.state.Locked': 'Gesperrt',
+        'entity.select.work_mode_control.state.Plug&Charge': 'Plug & Charge',
         'entity.sensor.alarm_code.name': 'Alarmcode',
         'entity.sensor.ambient_temperature.name': 'Innentemperatur',
         'entity.sensor.cc_status.name': 'CC Status',
@@ -15461,8 +15461,8 @@
       'issues': dict({
         'issues.needs_human.description': 'Der Charger hat einen Fehler gemeldet, der sich nicht von selbst behebt, daher bleibt das Laden ausgeschaltet. Prüfen Sie den Charger und das Fahrzeug. Wenn es sicher ist, schalten Sie den Ladeschalter selbst wieder ein, um fortzufahren.',
         'issues.needs_human.title': 'Charger benötigt Ihre Aufmerksamkeit',
-        'issues.wrong_work_mode.description': 'Der Work Mode des Chargers steht auf {mode}. Diese Integration funktioniert nur mit Plug&Charge: In jedem anderen Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Work Mode des Chargers auf Plug&Charge (Auswahl „Work Mode“ am Charger-Gerät).',
-        'issues.wrong_work_mode.title': 'Work Mode des Chargers muss Plug&Charge sein',
+        'issues.wrong_work_mode.description': 'Der Arbeitsmodus des Chargers steht auf {mode}. In diesem Modus startet ein angeschlossenes Fahrzeug nicht zu laden. Stellen Sie den Arbeitsmodus des Chargers auf Plug&Charge oder Gesteuert (Auswahl „Arbeitsmodus“ am Charger-Gerät).',
+        'issues.wrong_work_mode.title': 'Arbeitsmodus des Chargers verhindert das Laden',
       }),
       'keys': list([
         'config.abort.already_configured',
@@ -15470,10 +15470,15 @@
         'config.error.unknown',
         'config.step.user.data.host',
         'config.step.user.data.port',
-        'config.step.user.data.scan_interval',
         'config.step.user.data.slave_id',
         'config.step.user.description',
         'config.step.user.title',
+        'device_automation.trigger_type.alarm',
+        'device_automation.trigger_type.charging_started',
+        'device_automation.trigger_type.charging_stopped',
+        'device_automation.trigger_type.fault',
+        'device_automation.trigger_type.session_completed',
+        'device_automation.trigger_type.vehicle_plugged_in',
         'entity.binary_sensor.auto_phase_switch.name',
         'entity.binary_sensor.has_alarm.name',
         'entity.binary_sensor.has_fault.name',
@@ -15492,9 +15497,9 @@
         'entity.select.phase_switching_control.state.l3_single_phase',
         'entity.select.phase_switching_control.state.three_phase',
         'entity.select.work_mode_control.name',
-        'entity.select.work_mode_control.state.controlled',
-        'entity.select.work_mode_control.state.locked',
-        'entity.select.work_mode_control.state.plug_and_charge',
+        'entity.select.work_mode_control.state.Controlled',
+        'entity.select.work_mode_control.state.Locked',
+        'entity.select.work_mode_control.state.Plug&Charge',
         'entity.sensor.alarm_code.name',
         'entity.sensor.ambient_temperature.name',
         'entity.sensor.cc_status.name',
@@ -15604,9 +15609,9 @@
         'entity.select.phase_switching_control.state.l3_single_phase': 'L3 (Single Phase)',
         'entity.select.phase_switching_control.state.three_phase': 'Three Phase',
         'entity.select.work_mode_control.name': 'Work Mode',
-        'entity.select.work_mode_control.state.controlled': 'Controlled',
-        'entity.select.work_mode_control.state.locked': 'Locked',
-        'entity.select.work_mode_control.state.plug_and_charge': 'Plug & Charge',
+        'entity.select.work_mode_control.state.Controlled': 'Controlled',
+        'entity.select.work_mode_control.state.Locked': 'Locked',
+        'entity.select.work_mode_control.state.Plug&Charge': 'Plug & Charge',
         'entity.sensor.alarm_code.name': 'Alarm Code',
         'entity.sensor.ambient_temperature.name': 'Internal Temperature',
         'entity.sensor.cc_status.name': 'CC Status',
@@ -15697,10 +15702,15 @@
         'config.error.unknown',
         'config.step.user.data.host',
         'config.step.user.data.port',
-        'config.step.user.data.scan_interval',
         'config.step.user.data.slave_id',
         'config.step.user.description',
         'config.step.user.title',
+        'device_automation.trigger_type.alarm',
+        'device_automation.trigger_type.charging_started',
+        'device_automation.trigger_type.charging_stopped',
+        'device_automation.trigger_type.fault',
+        'device_automation.trigger_type.session_completed',
+        'device_automation.trigger_type.vehicle_plugged_in',
         'entity.binary_sensor.auto_phase_switch.name',
         'entity.binary_sensor.has_alarm.name',
         'entity.binary_sensor.has_fault.name',
@@ -15719,9 +15729,9 @@
         'entity.select.phase_switching_control.state.l3_single_phase',
         'entity.select.phase_switching_control.state.three_phase',
         'entity.select.work_mode_control.name',
-        'entity.select.work_mode_control.state.controlled',
-        'entity.select.work_mode_control.state.locked',
-        'entity.select.work_mode_control.state.plug_and_charge',
+        'entity.select.work_mode_control.state.Controlled',
+        'entity.select.work_mode_control.state.Locked',
+        'entity.select.work_mode_control.state.Plug&Charge',
         'entity.sensor.alarm_code.name',
         'entity.sensor.ambient_temperature.name',
         'entity.sensor.cc_status.name',

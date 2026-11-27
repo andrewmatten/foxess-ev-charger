@@ -38,6 +38,7 @@ BLUEPRINT_SRC = (
 GRID = "sensor.grid_power"
 NUMBER = "number.charger_max_current"
 SWITCH = "switch.charger_charging"
+CONNECTED = "binary_sensor.charger_vehicle_connected"
 
 T0 = datetime(2026, 9, 18, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -65,6 +66,8 @@ class Harness:
         self.number_writes: list[float] = []
         self.turn_ons = 0
         self.turn_offs = 0
+        self.connected = True
+        self.set_connected(True)
 
     async def async_register(self):
         async def _set_value(call):
@@ -74,11 +77,15 @@ class Harness:
 
         async def _turn_on(call):
             self.turn_ons += 1
-            self.set_switch("on")
+            if self.connected:
+                self.set_switch("on", intent_enabled=True)
+            else:
+                # Real switch stays off while unplugged, staging intent_enabled.
+                self.set_switch("off", intent_enabled=True)
 
         async def _turn_off(call):
             self.turn_offs += 1
-            self.set_switch("off")
+            self.set_switch("off", intent_enabled=False)
 
         self.hass.services.async_register("number", "set_value", _set_value)
         self.hass.services.async_register("switch", "turn_on", _turn_on)
@@ -89,8 +96,21 @@ class Harness:
             NUMBER, str(amps), {"min": minimum, "max": maximum, "step": 1}
         )
 
-    def set_switch(self, state: str):
-        self.hass.states.async_set(SWITCH, state)
+    def set_switch(self, state: str, *, intent_enabled: bool | None = None, **attrs):
+        extra = dict(attrs)
+        if intent_enabled is not None:
+            extra["intent_enabled"] = intent_enabled
+        elif state == "on":
+            extra.setdefault("intent_enabled", True)
+        else:
+            extra.setdefault("intent_enabled", False)
+        self.hass.states.async_set(SWITCH, state, extra)
+
+    def set_connected(self, connected: bool):
+        self.connected = connected
+        self.hass.states.async_set(
+            CONNECTED, "on" if connected else "off", {"device_class": "plug"}
+        )
 
     def set_grid(self, value, *, unit="W"):
         self.hass.states.async_set(
@@ -106,6 +126,7 @@ async def _setup(hass, inputs=None):
         "grid_power_sensor": GRID,
         "max_current_number": NUMBER,
         "charging_switch": SWITCH,
+        "vehicle_connected": CONNECTED,
         "import_ceiling_watts": 200,
         "hysteresis_watts": 150,
         "current_step_amps": 1,
@@ -380,7 +401,7 @@ async def test_raise_calls_setpoint_service_before_starting_the_session(
         await hass.async_block_till_done()
 
     assert order == ["number", "switch_on"]
-    assert h.number_writes == [11.0]
+    assert h.number_writes == [6.0]
 
 
 async def test_inverted_sign_input_flips_the_direction(hass, install_blueprint):

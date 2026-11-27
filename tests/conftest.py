@@ -1,23 +1,19 @@
 """Shared pytest fixtures for the FoxESS EV Charger test suite.
 
-This repo ships with `content_in_root: true` in hacs.json (see README) - the
-integration's own files (__init__.py, const.py, etc.) live directly at the
-repo root rather than under a custom_components/<domain>/ folder, which is
-what HA's test tooling (and the `custom_components.foxess_charger.*` import
-path used throughout this test suite) expects to find. `custom_components/
-foxess_charger` at the repo root is a symlink back to `..` (the repo root
-itself) that satisfies that expectation for tests only - it changes nothing
-about how the integration is packaged or deployed.
+The integration lives under `custom_components/foxess_charger/` (standard HACS
+layout with `content_in_root: false`), matching the `custom_components.foxess_charger.*`
+import path expected by Home Assistant and the test suite.
 """
 from __future__ import annotations
 
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
 # Put the repo root on sys.path so `import custom_components.foxess_charger`
-# resolves via the symlink above, regardless of where pytest is invoked from.
+# resolves regardless of where pytest is invoked from.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
@@ -53,3 +49,10 @@ def _real_sockets_for_modbus_loopback_tests(request):
     pytest_socket.enable_socket()
     yield
     socket.socket = blocked
+
+
+@pytest.fixture(autouse=True)
+def _stop_unstopped_patches():
+    """Stop any unittest.mock patches started with .start() during a test."""
+    yield
+    patch.stopall()
