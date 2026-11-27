@@ -1900,10 +1900,12 @@ class ChargingController:
 
     async def async_set_power(self, raw: int) -> CommandResult:
         self._require_ready()
-        if not (_is_int(raw) and 0 <= raw <= SAVED_POWER_RAW_MAX):
+        if not (_is_int(raw) and 0 <= raw <= MAX_POWER_RAW):
             raise ValueError(f"invalid power {raw!r}")
         if self._max_power is not None and raw > self._max_power:
             raise ValueError(f"power {raw} above device maximum {self._max_power}")
+        if raw > SAVED_POWER_RAW_MAX:
+            raise ValueError(f"invalid power {raw!r}")
         return await self._change(power_raw=raw)
 
     async def async_set_current(self, raw: int) -> CommandResult:
