@@ -7,8 +7,7 @@
         "data": {
           "host": "Charger IP address or hostname",
           "port": "Modbus TCP port",
-          "slave_id": "Modbus unit ID (slave ID)",
-          "scan_interval": "Scan interval in seconds"
+          "slave_id": "Modbus unit ID (slave ID)"
         }
       }
     },
@@ -36,6 +35,16 @@
     "error": {
       "scan_interval_too_low": "Scan interval must be at least 5 seconds.",
       "scan_interval_too_high": "Scan interval must be 300 seconds or less."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "vehicle_plugged_in": "Vehicle plugged in",
+      "charging_started": "Charging started",
+      "charging_stopped": "Charging stopped",
+      "session_completed": "Charging session completed",
+      "fault": "Charger fault detected",
+      "alarm": "Charger alarm detected"
     }
   },
   "issues": {

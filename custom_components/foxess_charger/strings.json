@@ -1,0 +1,288 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to the charger",
+        "description": "Enter the charger's network details. It must answer Modbus TCP requests on your local network.",
+        "data": {
+          "host": "Charger IP address or hostname",
+          "port": "Modbus TCP port",
+          "slave_id": "Modbus unit ID (slave ID)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The charger did not answer a Modbus read. Check the host, port and unit ID.",
+      "unknown": "Something unexpected went wrong; the log has the details."
+    },
+    "abort": {
+      "already_configured": "This charger is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Charger options",
+        "data": {
+          "scan_interval": "Scan interval in seconds",
+          "phase_box_fitted": "Phase-switch box fitted"
+        },
+        "data_description": {
+          "phase_box_fitted": "Turn on only if a FoxESS phase-switch box is installed. Without one, the manual phase selector does nothing."
+        }
+      }
+    },
+    "error": {
+      "scan_interval_too_low": "Scan interval must be at least 5 seconds.",
+      "scan_interval_too_high": "Scan interval must be 300 seconds or less."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "vehicle_plugged_in": "Vehicle plugged in",
+      "charging_started": "Charging started",
+      "charging_stopped": "Charging stopped",
+      "session_completed": "Charging session completed",
+      "fault": "Charger fault detected",
+      "alarm": "Charger alarm detected"
+    }
+  },
+  "issues": {
+    "wrong_work_mode": {
+      "title": "Charger Work Mode prevents charging",
+      "description": "The charger's Work Mode is set to {mode}. In this mode a plugged-in car will not start charging. Set the charger's Work Mode to Plug&Charge or Controlled (Work Mode select on the charger device)."
+    },
+    "needs_human": {
+      "title": "Charger needs your attention",
+      "description": "The charger reported a fault that will not clear by itself, so charging stays off. Check the charger and the car. When it is safe, turn the Charging switch on yourself to resume."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "software_version": {
+        "name": "Software Version"
+      },
+      "device_address": {
+        "name": "Device Address"
+      },
+      "id_serial_number": {
+        "name": "Serial Number"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "idle": "Idle",
+          "connected": "Connected",
+          "start": "Starting",
+          "charging": "Charging",
+          "paused": "Paused",
+          "finished": "Finished",
+          "fault": "Fault",
+          "reserved": "Reserved",
+          "locked": "Locked",
+          "phase_switching": "Phase switching",
+          "unknown": "Unrecognized"
+        }
+      },
+      "cp_status": {
+        "name": "CP Status",
+        "state": {
+          "fault": "Fault",
+          "12v_disconnected": "12V (Disconnected)",
+          "9v_connected": "9V (Connected)",
+          "6v_ready": "6V (Ready)",
+          "unknown": "Unrecognized"
+        }
+      },
+      "cc_status": {
+        "name": "CC Status",
+        "state": {
+          "disconnected": "Disconnected",
+          "connected": "Connected",
+          "unknown": "Unrecognized"
+        }
+      },
+      "lock_status": {
+        "name": "Lock Status",
+        "state": {
+          "unlocked": "Unlocked",
+          "locked": "Locked",
+          "unknown": "Unrecognized"
+        }
+      },
+      "work_mode": {
+        "name": "Work Mode",
+        "state": {
+          "controlled": "Controlled",
+          "plug_and_charge": "Plug & Charge",
+          "locked": "Locked",
+          "unknown": "Unrecognized"
+        }
+      },
+      "phase_sequence": {
+        "name": "Phase Sequence",
+        "state": {
+          "three_phase": "Three Phase",
+          "l2_single_phase": "L2 (Single Phase)",
+          "l3_single_phase": "L3 (Single Phase)",
+          "unknown": "Unrecognized"
+        }
+      },
+      "stop_reason": {
+        "name": "Stop Reason"
+      },
+      "port_temperature": {
+        "name": "Port Temperature"
+      },
+      "ambient_temperature": {
+        "name": "Internal Temperature"
+      },
+      "l1_voltage": {
+        "name": "L1 Voltage"
+      },
+      "l2_voltage": {
+        "name": "L2 Voltage"
+      },
+      "l3_voltage": {
+        "name": "L3 Voltage"
+      },
+      "l1_current": {
+        "name": "L1 Current"
+      },
+      "l2_current": {
+        "name": "L2 Current"
+      },
+      "l3_current": {
+        "name": "L3 Current"
+      },
+      "charging_power": {
+        "name": "Charging Power"
+      },
+      "max_supported_power": {
+        "name": "Max Supported Power"
+      },
+      "min_supported_power": {
+        "name": "Min Supported Power"
+      },
+      "max_supported_current": {
+        "name": "Max Supported Current"
+      },
+      "min_supported_current": {
+        "name": "Min Supported Current"
+      },
+      "current_session_energy": {
+        "name": "Current Session Energy"
+      },
+      "total_energy": {
+        "name": "Total Energy"
+      },
+      "alarm_code": {
+        "name": "Alarm Code"
+      },
+      "fault_code": {
+        "name": "Fault Code"
+      },
+      "rfid_card": {
+        "name": "RFID Card"
+      },
+      "last_session_energy": {
+        "name": "Last Session Energy"
+      },
+      "last_session_duration": {
+        "name": "Last Session Duration"
+      },
+      "transport_errors": {
+        "name": "Transport Errors"
+      },
+      "charging_status_reason": {
+        "name": "Charging Status Reason",
+        "state": {
+          "charger_offline": "Charger offline",
+          "needs_attention": "Needs your attention",
+          "stop_failed": "Stop not confirmed, retrying",
+          "charger_fault": "Charger fault, retrying",
+          "link_problem": "Connection problem, retrying",
+          "link_uncertain": "Connection uncertain, charging held off",
+          "car_not_connected": "Car not connected",
+          "charger_locked": "Charger is locked",
+          "charging_off": "Charging switched off",
+          "waiting_for_car": "Waiting for the car",
+          "starting": "Starting",
+          "charging": "Charging"
+        }
+      }
+    },
+    "binary_sensor": {
+      "is_charging": {
+        "name": "Charging"
+      },
+      "vehicle_connected": {
+        "name": "Vehicle Connected"
+      },
+      "has_fault": {
+        "name": "Fault"
+      },
+      "has_alarm": {
+        "name": "Alarm"
+      },
+      "is_locked": {
+        "name": "Locked"
+      },
+      "auto_phase_switch": {
+        "name": "Auto Phase Switch"
+      }
+    },
+    "number": {
+      "max_charging_current": {
+        "name": "Max Charging Current"
+      },
+      "max_charging_power": {
+        "name": "Max Charging Power"
+      },
+      "allowed_charge_time": {
+        "name": "Allowed Charge Time"
+      },
+      "allowed_charge_energy": {
+        "name": "Allowed Charge Energy"
+      },
+      "time_validity": {
+        "name": "Command Time Validity"
+      },
+      "default_current": {
+        "name": "Default Current (Fallback)"
+      },
+      "min_switch_interval": {
+        "name": "Min Phase Switch Interval"
+      }
+    },
+    "select": {
+      "work_mode_control": {
+        "name": "Work Mode",
+        "state": {
+          "Controlled": "Controlled",
+          "Plug&Charge": "Plug & Charge",
+          "Locked": "Locked"
+        }
+      },
+      "phase_switching_control": {
+        "name": "Phase Sequence",
+        "state": {
+          "three_phase": "Three Phase",
+          "l2_single_phase": "L2 (Single Phase)",
+          "l3_single_phase": "L3 (Single Phase)"
+        }
+      }
+    },
+    "switch": {
+      "charging": {
+        "name": "Charging"
+      },
+      "lock": {
+        "name": "Lock"
+      },
+      "auto_phase_switch": {
+        "name": "Auto Phase Switch"
+      }
+    }
+  }
+}

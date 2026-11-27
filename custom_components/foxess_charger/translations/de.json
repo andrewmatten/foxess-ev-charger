@@ -7,8 +7,7 @@
         "data": {
           "host": "IP-Adresse oder Hostname des Chargers",
           "port": "Modbus-TCP-Port",
-          "slave_id": "Modbus-Unit-ID (Slave-ID)",
-          "scan_interval": "Aktualisierungsintervall in Sekunden"
+          "slave_id": "Modbus-Unit-ID (Slave-ID)"
         }
       }
     },
@@ -36,6 +35,16 @@
     "error": {
       "scan_interval_too_low": "Das Aktualisierungsintervall muss mindestens 5 Sekunden betragen.",
       "scan_interval_too_high": "Das Aktualisierungsintervall darf höchstens 300 Sekunden betragen."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "vehicle_plugged_in": "Fahrzeug angeschlossen",
+      "charging_started": "Laden gestartet",
+      "charging_stopped": "Laden gestoppt",
+      "session_completed": "Ladesitzung abgeschlossen",
+      "fault": "Charger-Fehler erkannt",
+      "alarm": "Charger-Alarm erkannt"
     }
   },
   "issues": {
