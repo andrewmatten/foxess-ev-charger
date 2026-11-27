@@ -228,7 +228,13 @@ class FoxESSChargerCoordinator(DataUpdateCoordinator):
         if not (model or serial or sw_version):
             return
         registry = dr.async_get(self.hass)
-        device = registry.async_get_device(identifiers={(DOMAIN, self.entry_id)})
+        # Looked up through this entry's devices: async_get_device by
+        # identifier is deprecated from HA 2026.x.
+        device = next(
+            (d for d in dr.async_entries_for_config_entry(registry, self.entry_id)
+             if (DOMAIN, self.entry_id) in d.identifiers),
+            None,
+        )
         if device is None:
             return
         updates: dict[str, str] = {}
