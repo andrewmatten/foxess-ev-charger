@@ -107,9 +107,9 @@ class FoxESSChargingSwitch(_ControllerSwitch):
     @property
     def is_on(self) -> bool | None:
         controller = self.coordinator.controller
-        if not controller.intent_enabled or controller.phase in (
-            "faulted", "stopped", "paused_below_minimum",
-        ):
+        # paused_below_minimum keeps the 3.1 reading (on while the session is
+        # open): automations key on it; Charging Status Reason explains it.
+        if not controller.intent_enabled or controller.phase in ("faulted", "stopped"):
             return False
         status = valid_status(self.coordinator.data or {})
         if status is None:

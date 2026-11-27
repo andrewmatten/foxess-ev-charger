@@ -26,7 +26,7 @@ Big review release: two independent deep-dive reviews, a council review and the 
 **Entities and Home Assistant**
 - Unknown fault/alarm readings (0xFFFF) no longer turn on Fault/Alarm or fire their device triggers.
 - Status and CC Status show "Unrecognized" for unknown codes. Firmware and board temperature show unknown instead of wrong values for missing readings.
-- Charging Status Reason: new reasons for an unreadable status, fallback settings not confirmed (often the charger is in FoxCloud read-only mode), charger locked, and below the 1.4 kW minimum; phase switching counts as charging. The charging switch reads off below the 1.4 kW minimum.
+- Charging Status Reason: new reasons for an unreadable status, fallback settings not confirmed (often the charger is in FoxCloud read-only mode), charger locked, and below the 1.4 kW minimum; phase switching counts as charging.
 - A person's turn-on clears a hard latch only if the switch was already showing it.
 - Settings and diagnostic entities are now in the Configuration and Diagnostic sections of the device page (entity IDs unchanged).
 - German entity names, Work Mode options and the Work Mode repair text are now translated; device triggers have readable names.

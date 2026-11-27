@@ -1,7 +1,7 @@
 """C17: Charging Status Reason separates status_unreadable from charger_offline,
 adds safety_config_unconfirmed (mentioning FoxCloud/read-only vs Modbus TCP),
 maps Work Mode Locked to charger_locked, maps status 9 (phase_switching) to charging,
-adds paused_below_minimum, makes switch.charging read off in paused_below_minimum,
+adds paused_below_minimum (switch.charging keeps its 3.1 reading there),
 and translates all reasons in strings.json, en.json, and de.json."""
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ async def test_locked_work_mode_phase_switching_and_paused_below_minimum_reasons
     assert _reason_sensor(coordinator).native_value == expected
 
 
-async def test_charging_switch_reads_off_in_paused_below_minimum(
+async def test_charging_switch_keeps_3_1_reading_in_paused_below_minimum(
     hass, enable_custom_integrations
 ):
     fake = FakeController(status=4, cc_status=1)  # active vehicle-paused session on wire
@@ -96,7 +96,8 @@ async def test_charging_switch_reads_off_in_paused_below_minimum(
     try:
         switch_state = hass.states.get("switch.foxess_charger_charging")
         reason_state = hass.states.get("sensor.foxess_charger_charging_status_reason")
-        assert switch_state.state == "off"
+        # Unchanged from 3.1 (automations key on it): on while the session is open.
+        assert switch_state.state == "on"
         assert switch_state.attributes["intent_enabled"] is True
         assert switch_state.attributes["control_phase"] == "paused_below_minimum"
         assert reason_state.state == "paused_below_minimum"
@@ -107,7 +108,7 @@ async def test_charging_switch_reads_off_in_paused_below_minimum(
         for active_status in (2, 3, 4, 9):
             fake.hw["status"] = active_status
             await coordinator.async_refresh()
-            assert entity.is_on is False
+            assert entity.is_on is True
     finally:
         await harness.async_unload()
 
