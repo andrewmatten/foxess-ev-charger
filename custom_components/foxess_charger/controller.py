@@ -1662,6 +1662,10 @@ class ChargingController:
             if regs is None or not (MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW):
                 raise ControlError("no saved power and device maximum unreadable")
             power = regs[0]
+        elif power < MIN_ENABLE_POWER_RAW:
+            raise ControlError(
+                "Max Charging Power is below 1.4 kW, charging cannot start"
+            )
         async def enable() -> CommandResult:
             # No await between this check and the change in _update_positive,
             # so on the one event loop no hard latch can land in between.
