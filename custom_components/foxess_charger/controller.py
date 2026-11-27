@@ -1897,17 +1897,31 @@ class ChargingController:
         A hard latch is cleared only with ``clear_hard`` (a person asked) and
         only if it was already there when this enable was called."""
         self._require_ready()
+        start_intent = self._intent
+        start_rev = start_intent.revision
         clear_hard = clear_hard and self.needs_human   # a later hard latch was not acknowledged
         if _REASON_SAFETY in self._protect:
             raise ControlError("safety configuration unconfirmed; enable blocked")
-        power = self._intent.power_raw
+        power = start_intent.power_raw
         if power is None:
             regs = await self._run(lambda: self._locked_read(REG_MAX_POWER))
+            if regs is not None and MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW:
+                if self._max_power is None:
+                    self._max_power = regs[0]
+            if self._intent.revision != start_rev:
+                if self._intent.safety_latched and (
+                    not start_intent.safety_latched
+                    or LATCH_RANK.get(self._intent.latch_cause, 2)
+                    > LATCH_RANK.get(start_intent.latch_cause, 2)
+                ):
+                    raise ControlError(
+                        self._last_error or "charger fault; output latched to zero"
+                    )
+                self._counters["superseded"] += 1
+                return CommandResult("superseded", self._intent.revision)
             if regs is None or not (MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW):
                 raise ControlError("no saved power and device maximum unreadable")
             power = regs[0]
-            if self._max_power is None:
-                self._max_power = power
         elif power < MIN_ENABLE_POWER_RAW:
             raise ControlError(
                 "Max Charging Power is below 1.4 kW, charging cannot start"
