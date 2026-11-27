@@ -392,9 +392,18 @@ class ChargerStorage:
         prev = session.get("prev_status") if isinstance(session, dict) else None
         active = _is_int(prev) and prev in LEGACY_ACTIVE_STATUS
         latched = hard or partial_latch
+        # When an authoritative 3.x state file already exists, a legacy
+        # fingerprint mismatch cannot be distinguished from an interrupted save
+        # or a rollback-and-reupgrade; fail closed to paused rather than
+        # resurrecting an unconfirmed enable or limit increase.
+        paused_on_mismatch = state is not None
         out = {
             "schema": CONTROLLER_SCHEMA,
-            "enabled": False if latched else (active and not (stop_inhibit or stop_pending)),
+            "enabled": (
+                False
+                if (latched or paused_on_mismatch)
+                else (active and not (stop_inhibit or stop_pending))
+            ),
             "power_raw": power,
             "current_raw": current,
             "revision": revision,
@@ -489,6 +498,21 @@ class ChargerStorage:
             or (previous["enabled"] and not candidate["enabled"])
         )
 
+    @classmethod
+    def _raises_output(cls, candidate: dict, previous: dict) -> bool:
+        """True if ``candidate`` relaxes protection or raises a saved limit."""
+        if candidate["enabled"] and not previous["enabled"]:
+            return True
+        if cls._latch_rank(candidate) < cls._latch_rank(previous):
+            return True
+        if previous["stop_fallback"] and not candidate["stop_fallback"]:
+            return True
+        for key in ("power_raw", "current_raw"):
+            prev_v, cand_v = previous.get(key), candidate.get(key)
+            if prev_v is not None and (cand_v is None or cand_v > prev_v):
+                return True
+        return False
+
     def _effective_controller(self) -> tuple[dict | None, bool]:
         """Controller state to persist, hardened if a newer save never landed."""
         controller = dict(self._controller) if self._controller is not None else None
@@ -543,27 +567,38 @@ class ChargerStorage:
         await store.async_save(payload)
         self._written[name] = payload
 
-    async def _async_write_locked(self) -> None:
-        # Legacy files first: if the new file then fails to save, the next
-        # load sees a fingerprint mismatch and imports the (newer) legacy
-        # projection instead of an older controller state. Caller holds
-        # self._write_lock so concurrent controller and session saves cannot
-        # interleave and leave a mismatched legacy_fingerprint on disk.
+    async def _async_write_locked(self, *, state_first: bool = False) -> None:
+        # Protective saves write legacy files first: if the new file then fails
+        # to save, the next load sees a fingerprint mismatch and imports the
+        # (newer, more protective) legacy projection instead of an older
+        # controller state. Output-raising saves write the authoritative state
+        # first so a failed state write never leaves an uncommitted higher
+        # limit or unpaused flag in the legacy files; if a subsequent legacy
+        # write fails, the fingerprint mismatch imports the older lower/paused
+        # legacy files and restores paused. Caller holds self._write_lock so
+        # concurrent controller and session saves cannot interleave and leave
+        # a mismatched legacy_fingerprint on disk.
         controller, stale = self._effective_controller()
         session = self._legacy_session_payload(
             controller, force_paused=stale and controller is None,
         )
         setpoints = self._legacy_setpoints_payload(controller)
         session_extra = dict(self._session_extra)
-        await self._save("session", self._session_store, session)
-        await self._save("setpoints", self._setpoints_store, setpoints)
-        if controller is None:
-            return
-        await self._save("state", self._state_store, {
+        state_payload = None if controller is None else {
             "controller": controller,
             "session": session_extra,
             "legacy_fingerprint": {"session": session, "setpoints": setpoints},
-        })
+        }
+        if state_first and not stale and state_payload is not None:
+            await self._save("state", self._state_store, state_payload)
+            await self._save("session", self._session_store, session)
+            await self._save("setpoints", self._setpoints_store, setpoints)
+            return
+        await self._save("session", self._session_store, session)
+        await self._save("setpoints", self._setpoints_store, setpoints)
+        if state_payload is None:
+            return
+        await self._save("state", self._state_store, state_payload)
 
     async def _async_write_all(self) -> None:
         async with self._write_lock:
@@ -587,8 +622,11 @@ class ChargerStorage:
                 return
             previous = self._controller
             self._controller = dict(state)
+            state_first = previous is not None and self._raises_output(
+                self._controller, previous
+            )
             try:
-                await self._async_write_locked()
+                await self._async_write_locked(state_first=state_first)
             except BaseException:
                 if not self._is_more_protective(self._controller, previous):
                     self._controller = previous
