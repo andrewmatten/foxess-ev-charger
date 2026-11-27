@@ -980,10 +980,28 @@ class ChargingController:
         intent, wire = self._intent, self._wire()
         power, current = wire
         if intent.stop_fallback:
-            ev = await self._read_status()
-            if ev.drawing:
-                await self._stop_sequence()
-            return CommandResult("confirmed", intent.revision, None)
+            ok = lambda ev: (  # noqa: E731
+                ev.valid and ev.status in PAUSED_STATUS and ev.power_raw <= LOW_POWER_RAW
+            )
+            deadline = self._clock() + self._timeout
+            first: float | None = None
+            while True:
+                self._check(wire)
+                ev = await self._observe()
+                if ev.drawing:
+                    await self._stop_sequence()
+                    self._counters["confirmations"] += 1
+                    return CommandResult("confirmed", self._intent.revision, None)
+                if ok(ev):
+                    if first is not None and ev.at - first >= OBSERVATION_GAP_S:
+                        self._counters["confirmations"] += 1
+                        return CommandResult("confirmed", intent.revision, None)
+                    first = ev.at if first is None else first
+                else:
+                    first = None
+                if self._clock() >= deadline:
+                    raise ControlError("charger status unreadable; pause not confirmed")
+                await self._sleep(POLL_STEP_S)
         if restore_hard and not (power or current):
             # Overtaken before preflight confirmed a healthy charger frame.
             await self._latch_fault("hard")
