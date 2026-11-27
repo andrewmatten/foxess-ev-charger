@@ -90,6 +90,9 @@ PLUG_AND_CHARGE_MODE = 1           # Work Mode (0x3000) where charger opens sess
 START_RETRY_S = 15.0
 OBSERVATION_GAP_S = 1.0            # pause needs two agreeing reads this far apart
 POLL_STEP_S = 0.5
+# Ceiling on how long one poll's optional/identity reads may hold the
+# controller lock on a slow or failing link (status always still runs).
+POLL_BUDGET_S = 8.0
 # Auto-release of a fault latch (paused, see _note_link_health): after a
 # healthy hold of COMMS_LATCH_RELEASE_S (comms) or FAULT_RELEASE_S (fault,
 # stop_failed), doubled per release in the current streak, at most
@@ -262,6 +265,47 @@ def _parse_releases(saved: dict, wall: float, now: float, latched: bool = False)
     return [now - a for a in sorted(ages, reverse=True) if -60 <= a < RELEASE_HOLD_MAX_S][-6:]
 
 
+class _PollIO:
+    """Poll-only proxy for SnapshotReader.
+
+    Stops further optional/identity reads in the same poll once a transport
+    failure (not a Modbus refusal) occurs or the poll budget has elapsed, so a
+    failing link cannot stack four sequential 5 s timeouts (~22 s) while
+    holding the controller lock.
+    """
+
+    def __init__(self, io, clock: Callable[[], float], budget: float) -> None:
+        self._io = io
+        self._clock = clock
+        self._budget = budget
+        self._failed = False
+        self._reads = 0
+        self._deadline = 0.0
+
+    def begin(self) -> None:
+        self._failed = False
+        self._reads = 0
+        self._deadline = self._clock() + self._budget
+
+    async def read(self, address: int, count: int) -> tuple[int, ...]:
+        if self._reads > 0 and (self._failed or self._clock() >= self._deadline):
+            raise TransportError("poll aborted to release controller lock")
+        self._reads += 1
+        try:
+            return await self._io.read(address, count)
+        except CommandRefused:
+            raise
+        except TransportError:
+            self._failed = True
+            raise
+
+    async def write(self, address: int, value: int) -> None:
+        await self._io.write(address, value)
+
+    async def close(self) -> None:
+        await self._io.close()
+
+
 class ChargingController:
     """Sole writer to the charger. All methods run on the event loop."""
 
@@ -280,10 +324,13 @@ class ChargingController:
         pause_confirmation_timeout: float = 30.0,
         telemetry_grace: float = 20.0,
         persist_timeout: float = 10.0,
+        poll_budget: float = POLL_BUDGET_S,
         read_snapshot: Callable[[Any], Awaitable[dict]] | None = None,
     ) -> None:
+        self._poll_io: _PollIO | None = None
         if read_snapshot is None:
-            reader = SnapshotReader(io, clock=clock)
+            self._poll_io = _PollIO(io, clock, poll_budget)
+            reader = SnapshotReader(self._poll_io, clock=clock)
             read_snapshot = lambda _io: reader.async_read()  # noqa: E731
         self._io = io
         self._persist = persist
@@ -1680,6 +1727,8 @@ class ChargingController:
 
     async def _op_poll(self) -> dict:
         async with self._lock:
+            if self._poll_io is not None:
+                self._poll_io.begin()
             try:
                 snap = dict(await self._read_snapshot(self._io))
             except Exception:  # noqa: BLE001 - failed mandatory block
