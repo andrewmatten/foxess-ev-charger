@@ -400,9 +400,15 @@ MODEL_CAPABILITIES: dict[str, dict[str, float]] = {
 }
 
 # Sanity upper bound on register power values (0.1 kW units): 1.5x the 22 kW
-# three-phase rating so a 22 kW unit reporting slightly above 22.0 kW (0x1011)
-# is accepted while corrupt values are rejected. Shared by controller & storage.
+# three-phase rating so a 22 kW unit reporting slightly above 22.0 kW (0x1011,
+# 0x100E, live 0x3002) is accepted while corrupt values are rejected.
 MAX_POWER_RAW = 330
+
+# Upper bound on persisted/commanded power setpoints (0.1 kW units): matches
+# the A022 22.0 kW rating and 3.1.x persistence.POWER_RAW_MAX (220), so a 3.2
+# state file can never be rejected as malformed (which cleared safety_latched)
+# if a user rolls back to 3.1.4.
+SAVED_POWER_RAW_MAX = 220
 
 # This integration's only tested hardware - used whenever the detected
 # model string (or its absence, before the first successful read) doesn't

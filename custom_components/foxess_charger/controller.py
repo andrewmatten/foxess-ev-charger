@@ -37,6 +37,7 @@ from typing import Any, Awaitable, Callable
 from .const import (
     CP_STATUS_MAP,
     MAX_POWER_RAW,
+    SAVED_POWER_RAW_MAX,
     STATUS_MAP,
     STOP_REASON_MAP,
     REG_ALLOWED_CHARGE_ENERGY,
@@ -233,7 +234,7 @@ def _parse_saved(saved: Any) -> Intent | None:
     if not all(isinstance(f, bool) for f in flags):
         return None
     power, current, rev = (saved.get(k) for k in ("power_raw", "current_raw", "revision"))
-    if power is not None and not (_is_int(power) and 0 <= power <= MAX_POWER_RAW):
+    if power is not None and not (_is_int(power) and 0 <= power <= SAVED_POWER_RAW_MAX):
         return None
     if current is not None and not (
         _is_int(current) and MIN_CURRENT_RAW <= current <= MAX_CURRENT_RAW
@@ -966,7 +967,7 @@ class ChargingController:
                         and _is_int(cap)
                         and MIN_ENABLE_POWER_RAW <= cap <= self._max_power
                     ):
-                        power = cap
+                        power = min(cap, SAVED_POWER_RAW_MAX)
                 elif power < MIN_ENABLE_POWER_RAW:
                     power = None
                 self._released = False
@@ -1840,7 +1841,10 @@ class ChargingController:
                 self._max_power is not None and _is_int(cap)
                 and MIN_ENABLE_POWER_RAW <= cap <= self._max_power
             )
-            self._intent = replace(self._intent, power_raw=cap if valid else 0)
+            self._intent = replace(
+                self._intent,
+                power_raw=min(cap, SAVED_POWER_RAW_MAX) if valid else 0,
+            )
         p = self._intent.power_raw
         if self._max_power is not None and p is not None and p > self._max_power:
             # Never clamp silently or run uncapped: pause and show why.
@@ -1896,7 +1900,7 @@ class ChargingController:
 
     async def async_set_power(self, raw: int) -> CommandResult:
         self._require_ready()
-        if not (_is_int(raw) and 0 <= raw <= MAX_POWER_RAW):
+        if not (_is_int(raw) and 0 <= raw <= SAVED_POWER_RAW_MAX):
             raise ValueError(f"invalid power {raw!r}")
         if self._max_power is not None and raw > self._max_power:
             raise ValueError(f"power {raw} above device maximum {self._max_power}")
@@ -1989,7 +1993,7 @@ class ChargingController:
                 return CommandResult("superseded", self._intent.revision)
             if regs is None or not (MIN_ENABLE_POWER_RAW <= regs[0] <= MAX_POWER_RAW):
                 raise ControlError("no saved power and device maximum unreadable")
-            power = regs[0]
+            power = min(regs[0], SAVED_POWER_RAW_MAX)
         elif power < MIN_ENABLE_POWER_RAW:
             raise ControlError(
                 "Max Charging Power is below 1.4 kW, charging cannot start"
