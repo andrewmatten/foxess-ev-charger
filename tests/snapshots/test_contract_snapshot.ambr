@@ -10914,7 +10914,7 @@
         'sentinels': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -10929,7 +10929,7 @@
         'unknown_enums': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'zeros': dict({
           'attributes': dict({
@@ -13717,7 +13717,7 @@
         'sentinels': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'three_phase_a011': dict({
           'attributes': dict({
@@ -13732,7 +13732,7 @@
         'unknown_enums': dict({
           'attributes': dict({
           }),
-          'value': None,
+          'value': 'unknown',
         }),
         'zeros': dict({
           'attributes': dict({

@@ -43,7 +43,7 @@ BLOCK_KEYS: dict[str, tuple[str, ...]] = {
         "lock_status", "phase_sequence", "max_power_raw", "min_power_raw",
         "max_current_raw", "min_current_raw", "alarm_code",
         "total_energy_raw", "current_energy_raw", "fault_code", "rfid_card",
-        "status_valid", "cc_status_valid",
+        "status_raw", "cc_status_raw", "status_valid", "cc_status_valid",
     ),
     BLOCK_CONFIG: (
         "work_mode", "max_charging_current_raw", "max_charging_power_raw",

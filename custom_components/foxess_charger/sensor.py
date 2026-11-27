@@ -51,7 +51,12 @@ from .const import (
     decode_enum,
     get_capabilities,
 )
-from .protocol import STATUS_PHASE_SWITCHING, UNKNOWN_ALARM_CODE, UNKNOWN_FAULT_CODE
+from .protocol import (
+    STATUS_NAMES,
+    STATUS_PHASE_SWITCHING,
+    UNKNOWN_ALARM_CODE,
+    UNKNOWN_FAULT_CODE,
+)
 from .session import valid_status
 
 _LOGGER = logging.getLogger(__name__)
@@ -120,13 +125,18 @@ def _scaled(key: str, digits: int = 1) -> Callable[[Observation], float]:
 
 
 def _decoded(
-    key: str, table: dict[int, str], *, enum: bool = True,
+    key: str, table: dict[int, str], *, enum: bool = True, raw_key: str | None = None,
 ) -> Callable[[Observation], str | None]:
     """Enum register through its code table. For an ENUM sensor an
     unrecognised code shows the translatable "unknown" option; otherwise the
     state is simply left empty. A missing reading is always None."""
     unknown = "unknown" if enum else None
-    return lambda data: decode_enum(data.get(key), table, key, unknown_label=unknown)
+
+    def value(data: Observation) -> str | None:
+        raw = data[raw_key] if raw_key and raw_key in data else data.get(key)
+        return decode_enum(raw, table, key, unknown_label=unknown)
+
+    return value
 
 
 def _firmware(data: Observation) -> str:
@@ -272,13 +282,14 @@ def _power(key: str, raw_key: str, *, icon: str, digits: int,
 
 
 def _enum_sensor(key: str, icon: str, data_key: str, table: dict[int, str], *,
+                 raw_key: str | None = None, decode_table: dict[int, str] | None = None,
                  translation_key: str | None = None, block: str = BLOCK_STATUS,
                  enabled: bool = True) -> FoxESSSensorEntityDescription:
     return FoxESSSensorEntityDescription(
         key=key, translation_key=translation_key or key, icon=icon,
         device_class=SensorDeviceClass.ENUM, options=_enum_options(table),
         entity_registry_enabled_default=enabled, block=block,
-        value_fn=_decoded(data_key, table),
+        value_fn=_decoded(data_key, decode_table or table, raw_key=raw_key),
     )
 
 
@@ -304,9 +315,11 @@ SENSORS: tuple[FoxESSSensorEntityDescription, ...] = (
     # "no reading yet" stays HA's own unknown.
     # "phase_switching" comes after the original states so they keep their
     # option positions.
-    _enum_sensor("status", "mdi:ev-station", "status", STATUS_SENSOR_MAP),
+    _enum_sensor("status", "mdi:ev-station", "status", STATUS_SENSOR_MAP,
+                 raw_key="status_raw", decode_table=STATUS_NAMES),
     _enum_sensor("cp_status", "mdi:connection", "cp_status", CP_STATUS_MAP),
-    _enum_sensor("cc_status", "mdi:cable-data", "cc_status", CC_STATUS_MAP),
+    _enum_sensor("cc_status", "mdi:cable-data", "cc_status", CC_STATUS_MAP,
+                 raw_key="cc_status_raw"),
     _enum_sensor("lock_status", "mdi:lock", "lock_status", LOCK_STATUS_MAP),
     # Read from the settings block. The entity key ("work_mode_sensor") and
     # translation key ("work_mode") differ on purpose.
