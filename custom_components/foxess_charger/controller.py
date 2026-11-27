@@ -496,6 +496,13 @@ class ChargingController:
         self._persisted = await self._save_intent()
         return self._intent
 
+    def _rollback(self, before: Intent, changes: dict[str, Any]) -> None:
+        """Put back changed fields if nothing newer has replaced them."""
+        undo = {k: getattr(before, k) for k, v in changes.items()
+                if getattr(self._intent, k) == v}
+        if undo:
+            self._intent = replace(self._intent, revision=self._intent.revision + 1, **undo)
+
     async def _update_positive(self, **changes) -> Intent:
         """``_update`` for a change that may allow more output (enable, higher
         limit). If the save fails and output would rise, the changed fields
@@ -506,9 +513,7 @@ class ChargingController:
         intent = await self._update(**changes)
         if self._persisted or not self._raises_output(before, intent):
             return intent
-        undo = {k: getattr(before, k) for k, v in changes.items()
-                if getattr(self._intent, k) == v}
-        self._intent = replace(self._intent, revision=self._intent.revision + 1, **undo)
+        self._rollback(before, changes)
         raise ControlError(self._persist_error or "change could not be saved; not applied")
 
     @staticmethod
@@ -1627,7 +1632,9 @@ class ChargingController:
         """A limit change is not an authorization: while enabled it writes a
         positive value only if a fresh observation shows an active session.
         Otherwise it is staged, and an observed finish revokes the enable."""
+        before = self._intent
         intent = await self._update_positive(**changes)
+        saved = self._persisted
         if intent.enabled and not (intent.stop_fallback or intent.safety_latched):
             if any(self._wire()) and not await self._run(self._op_observe):
                 intent = self._intent
@@ -1635,7 +1642,8 @@ class ChargingController:
                     raise ControlError(self._last_error or "charger fault; output latched to zero")
             else:
                 return await self._run(lambda: self._op_apply(intent.revision))
-        if not self._persisted:  # a staged value lives only in storage
+        if not saved:  # a staged value lives only in storage
+            self._rollback(before, changes)
             raise ControlError("staged value could not be saved")
         return CommandResult("staged", intent.revision)
 
