@@ -399,6 +399,11 @@ MODEL_CAPABILITIES: dict[str, dict[str, float]] = {
     "A022":  {"max_power_kw": 22.0, "max_current_a": 32.0},  # three-phase, untested
 }
 
+# Sanity upper bound on register power values (0.1 kW units): 1.5x the 22 kW
+# three-phase rating so a 22 kW unit reporting slightly above 22.0 kW (0x1011)
+# is accepted while corrupt values are rejected. Shared by controller & storage.
+MAX_POWER_RAW = 330
+
 # This integration's only tested hardware - used whenever the detected
 # model string (or its absence, before the first successful read) doesn't
 # match any known prefix, so capability values are never left undefined.

@@ -36,6 +36,7 @@ from typing import Any, Awaitable, Callable
 
 from .const import (
     CP_STATUS_MAP,
+    MAX_POWER_RAW,
     STATUS_MAP,
     STOP_REASON_MAP,
     REG_ALLOWED_CHARGE_ENERGY,
@@ -66,7 +67,6 @@ _LOGGER = logging.getLogger(__name__)
 
 SCHEMA = 1
 MIN_ENABLE_POWER_RAW = 14          # 1.4 kW: below this the wire value is 0
-MAX_POWER_RAW = 1000               # sanity bound; entities apply model ranges
 MIN_CURRENT_RAW, MAX_CURRENT_RAW = 60, 320
 LOW_POWER_RAW = 1                  # measured <= 0.1 kW counts as not drawing
 # The firmware reverts setpoints ~60 s after a write even when 0x3005 reports

@@ -29,6 +29,7 @@ from homeassistant.helpers.storage import Store
 from .const import (
     DOMAIN,
     ENERGY_GUARDS,
+    MAX_POWER_RAW,
     REG_MAX_CHARGING_CURRENT,
     REG_MAX_CHARGING_POWER,
     USER_TIME_VALIDITY_RANGE,
@@ -46,7 +47,7 @@ SESSION_FIELDS = (
 # Plausibility bounds for restored limits, in register units (0.1 kW /
 # 0.1 A). Model-specific bounds are the controller's job; these only reject
 # values no supported charger could ever hold.
-POWER_RAW_MAX = 220
+POWER_RAW_MAX = MAX_POWER_RAW
 # 2.4.3 prev_status values that mean a session was genuinely running.
 LEGACY_ACTIVE_STATUS = (2, 3, 4)
 CURRENT_RAW_RANGE = (60, 320)
