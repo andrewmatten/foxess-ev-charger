@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from homeassistant.helpers import entity_registry as er
 
@@ -35,12 +36,30 @@ def test_descriptions_do_not_hardcode_name_overriding_translation_key():
         assert not isinstance(desc.name, str), desc.key
 
 
-def test_work_mode_select_state_keys_match_select_options():
-    expected = set(WORK_MODE_SELECT_OPTIONS.values())
-    for lang in ("en", "de"):
-        data = _load(lang)
-        states = data["entity"]["select"]["work_mode_control"]["state"]
-        assert set(states) == expected, lang
+def test_entity_translation_keys_pass_hassfest_key_rule():
+    """hassfest rejects entity/state keys that are not [a-z0-9-_]+ (or start or
+    end with - or _). The Work Mode options are display strings that
+    automations select by value ("Plug&Charge"), so they cannot be state keys."""
+    key_re = re.compile(r"^(?![-_])[a-z0-9-_]+(?<![-_])$")
+    base = os.path.dirname(TRANSLATIONS_DIR)
+    files = [os.path.join(base, "strings.json")] + [
+        os.path.join(TRANSLATIONS_DIR, f"{lang}.json") for lang in ("en", "de")
+    ]
+
+    def bad_keys(node, path):
+        if not isinstance(node, dict):
+            return []
+        out = []
+        for key, value in node.items():
+            if not key_re.match(key):
+                out.append(f"{path}.{key}")
+            out.extend(bad_keys(value, f"{path}.{key}"))
+        return out
+
+    for file in files:
+        with open(file, encoding="utf-8") as fh:
+            data = json.load(fh)
+        assert bad_keys(data["entity"], "entity") == [], file
 
 
 def test_german_wrong_work_mode_repair_allows_controlled_mode():

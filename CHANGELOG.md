@@ -1,6 +1,8 @@
 # Changelog
 
-## 3.2.0-beta.1 - 2026-11-27
+## 3.2.0-beta.2 - 2026-11-28
+
+beta.2 fixes Home Assistant's translation check (hassfest), which failed on beta.1 because the Work Mode option labels used invalid translation keys. No change to charging behaviour.
 
 Big review release: two independent deep-dive reviews, a council review and the backlog from the 3.1.3 review, all fixed with regression tests.
 
@@ -33,7 +35,7 @@ Big review release: two independent deep-dive reviews, a council review and the 
 - Charging Status Reason: new reasons for an unreadable status, fallback settings not confirmed (often the charger is in FoxCloud read-only mode), charger locked, and below the 1.4 kW minimum; phase switching counts as charging.
 - A person's turn-on clears a hard latch only if the switch was already showing it.
 - Settings and diagnostic entities are now in the Configuration and Diagnostic sections of the device page (entity IDs unchanged).
-- German entity names, Work Mode options and the Work Mode repair text are now translated; device triggers have readable names.
+- German entity names and the Work Mode repair text are now translated (Work Mode options keep their names, which automations use); device triggers have readable names.
 - Default Current's maximum follows the model (16 A on 11 kW models).
 - The device page shows firmware version and serial number, updated once the charger reports them.
 - Reconfigure: change the charger's IP address, port or unit ID without removing the integration. Setup strips spaces from the host and keeps your entries after an error.
